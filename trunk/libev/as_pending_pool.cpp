@@ -199,10 +199,6 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 	} while ( s > -1);
 }
 
-static void pending_cb_async(EV_P_ ev_async *w, int revents)
-{
-}
-
 int ty_pending_fetch_item(Pending_handle_t *_this, int &index, int &sock)
 {
 	Client_item_t *client = client_work_ghead(_this);
