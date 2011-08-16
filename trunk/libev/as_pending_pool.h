@@ -1,7 +1,7 @@
 #ifndef __TY_PENDING_POOL_H_
 #define __TY_PENDING_POOL_H_
 
-#include <ev.h>
+#include <sys/uio.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -20,6 +20,7 @@ extern void ty_pending_run(Pending_handle_t *phandle);
 extern int ty_pending_listen(Pending_handle_t *_this, const int fd);
 extern int ty_pending_listen_port(Pending_handle_t *_this, const int port);
 
+extern int as_socket_sendv(int fd, struct iovec *vec, int nvec);
 extern int as_socket_send(int fd, const void *buf, int len);
 
 extern int as_socket_recv(int fd, void *buf, int len);

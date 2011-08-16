@@ -11,6 +11,8 @@
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 
+#include <ev.h>
+
 #include "as_pending_pool.h"
 #include "ty_log.h"
 
@@ -303,6 +305,38 @@ int ty_pending_del(Pending_handle_t *_this)
 	return 0;
 }
 
+
+int as_socket_sendv(int fd, struct iovec *vec, int nvec)
+{
+	int i = 0, bytes = 0, rv = 0;
+
+	while (i < nvec) {
+		do {
+			rv = writev(fd, &vec[i], nvec - i);
+		} while (rv == -1 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
+
+		if (rv == -1) {
+			return -1;
+		}
+		bytes += rv;
+		/* recalculate vec to deal with partial writes */
+		while (rv > 0) {
+			if (rv < vec[i].iov_len) {
+				vec[i].iov_base = (char *) vec[i].iov_base + rv;
+				vec[i].iov_len -= rv;
+				rv = 0;
+			} else {
+				rv -= vec[i].iov_len;
+				++i;
+			}
+		}
+	}
+
+	/* We should get here only after we write out everything */
+
+	return bytes;
+}
+
 int as_socket_send(int fd, const void *buf, int len)
 {
 	int rv;
@@ -314,12 +348,10 @@ int as_socket_send(int fd, const void *buf, int len)
 		do {
 			rv = write(fd, pbuf + wlen, nwrite);
 			//DEBUG_LOG("w->%d %d %d [%d:%s]", fd, nwrite, rv, errno, strerror(errno));
-		} while (rv == -1 && ( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ));
-		if (errno == EPIPE) {
-			return -1;
-		}
+		} while (rv == -1 && ( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
+		//if (errno == EPIPE) { return -1; }
 		if (rv == -1) {
-			return wlen;
+			return -1;
 		}
 		nwrite -= rv;
 		wlen += rv;
@@ -340,11 +372,12 @@ int as_socket_recv(int fd, void *buf, int len)
 			rv = read(fd, pbuf + rlen, nread);
 			//DEBUG_LOG("r->%d %d %d [%d:%s]", fd, nread, rv, errno, strerror(errno));
 		} while (rv == -1 && ( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
-		if (errno == EPIPE) {
-			return -1;
-		}
-		if (rv <= 0) {
+		if (rv == 0) {
 			return rlen;
+		}
+		//if (errno == EPIPE) { return -1; }
+		if (rv == -1) {
+			return -1;
 		}
 		nread -= rv;
 		rlen += rv;
