@@ -28,7 +28,7 @@ int main(int argc, char ** argv)
 	printf("string[%d](%s)\n", len, buf);
 	int rv = is_valid_gb18030_chars(buf, len);
 	printf("is_valid [%s]\n", rv==0?"false":"true");
-	const char *p = str_valid_gb18030_head(buf, len - 2);
+	const char *p = str_valid_gb18030_head(buf, len - 2, 0);
 	printf("\nhead cbl[%d] len[%d](%s) pos[%d]\n", len - 2, len, p, p - buf);
 
 	p = str_valid_gb18030_tail(buf, len);

@@ -81,39 +81,59 @@ int is_valid_gb18030_chars(const char *s, const int slen)
 const char *str_valid_gb18030_head(const char *s /*point to begin*/, const int need_check_len, int strict)
 {
 	int i = 0;
-	if (MUST_IS_ASCII(s[0])) {
-		return s;
-	}
 	int min_valid = need_check_len;
 
 	{
+#define IS_HAS_MORE_CHAR(num) (min_valid - i > (num))
 		for (i=0; i<min_valid; i++) {
-			if (IS_GB_DWORD_LOW_LOW_PART(s[i])) {
-				min_valid = i + 1;
-				break;
-			} else if (MUST_IS_ASCII(s[i])) {
+			if (MUST_IS_ASCII(s[i])) {
 				min_valid = i;
 				break;
+			} else if (IS_GB_DWORD_LOW_LOW_PART(s[i])) {
+				if (min_valid > i + 1) {
+					min_valid = i + 1;
+				}
+				break;
 			} else if (IS_GB_DDWORD_LOW(s[i])) {
-				if (min_valid - i > 2 && !IS_GB_HALF_DDWORD(s + i + 1)) {
-					// may be the 4th c of DDWORD
+				if (IS_HAS_MORE_CHAR(1) && !IS_GB_DWORD_HIGH(s[i+1])) {
 					min_valid = i + 1;
 					break;
-				} else if (i > 0) {
-					if (min_valid - i > 2 && IS_GB_DDWORD(s + i - 1)) {
-						// is 4 DDWORD
-						min_valid = i - 1;
-						break;
-					}
+				}
+				if (i > 0 && !IS_GB_DWORD_HIGH(s[i-1])) {
 					min_valid = i;
 					break;
-				} else if (i == 0 && min_valid > 2 + 2 && IS_GB_DDWORD_3LOW(s) && !IS_GB_DDWORD(s + 1)) {
-					// is 2/4 DDWORD
-					min_valid = i + 3;
+				}
+				if (!IS_HAS_MORE_CHAR(2)) {
+					min_valid = i + 1;
 					break;
 				}
+				if (/* IS_HAS_MORE_CHAR(2) && */ !IS_GB_HALF_DDWORD(s + i + 1)) {
+					// must not be the 2nd char of a DDWORD
+					if (i > 2) {
+						if (IS_GB_DDWORD(s + i - 3)) {
+							min_valid = i - 3;
+						} else {
+							min_valid = i;
+						}
+					} else {
+						min_valid = i + 1;
+					}
+					break;
+				}
+				// 后面必定是4字节汉字的半个汉字 _HALF_DDWORD
+				if (i > 0) {
+					if (/* IS_HAS_MORE_CHAR(2) && */ IS_GB_DDWORD(s + i - 1)) {
+						// is 2/4 DDWORD
+						min_valid = i - 1;
+					} else {
+						min_valid = i;
+					}
+					break;
+				}
+				// i == 0
 			}
 		}
+#undef IS_HAS_MORE_CHAR
 		for (i=min_valid; i--;) {
 			if (IS_GB_DDWORD_LOW(s[i])) {
 				if (i > 2 && IS_GB_DDWORD(s + i - 3)) {
@@ -132,7 +152,7 @@ const char *str_valid_gb18030_head(const char *s /*point to begin*/, const int n
 			}
 		}
 		min_valid = i + 1;
-		if (min_valid == 0) {
+		if (min_valid < 1) {
 			return s;
 		}
 	}
@@ -143,10 +163,7 @@ const char *str_valid_gb18030_head(const char *s /*point to begin*/, const int n
 	//printf("min_valid %d( %s )\n", min_valid, s + min_valid);
 	for (i=min_valid; i--;) {
 		//printf("%d %#x ", i, VAL_C(s[i]));
-		if (IS_GB_DWORD_LOW_HIGH_PART(s[i]) && i>0 && IS_GB_DWORD_HIGH(s[i-1])) {
-			i -= 1;
-			continue;
-		} else if (IS_GB_DWORD_LOW_LOW_PART(s[i]) && i>0 && IS_GB_DWORD_HIGH(s[i-1])) {
+		if (IS_GB_DWORD_LOW_LOW_PART(s[i]) && i>0 && IS_GB_DWORD_HIGH(s[i-1])) {
 			min_valid = i + 1;
 			//printf("DWORD HL\n");
 			/* 有个蠤在墙角 => d3d0 b8f6 d040 d4da c7bd bdc7 */
@@ -168,6 +185,9 @@ const char *str_valid_gb18030_head(const char *s /*point to begin*/, const int n
 			}
 			//i -= 1; // it's just may be a DWORD
 			continue;
+		} else if (IS_GB_DWORD_LOW_HIGH_PART(s[i]) && i>0 && IS_GB_DWORD_HIGH(s[i-1])) {
+			i -= 1;
+			continue;
 		} else if (!IS_ASCII(s[i])) {
 			if (i!=0) {
 				//printf("!IS_ASCII may be catch some mistake ind[%d]\n", i);
@@ -176,6 +196,7 @@ const char *str_valid_gb18030_head(const char *s /*point to begin*/, const int n
 			break;
 		}
 	}
+
 	if (i < min_valid) {
 		i++;
 	}
