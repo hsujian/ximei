@@ -40,7 +40,7 @@ int lingering_close( int fd )
 		if (rv == -1) {
 			break;
 		}
-		WARNING_LOG("lc %d rv %d[%d]", fd, rv, errno);
+		DEBUG_LOG("lc %d rv %d[%d]", fd, rv, errno);
 	} while (rv > 0);
 	return close(fd);
 }
