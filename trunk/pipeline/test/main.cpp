@@ -2,8 +2,7 @@
 
 Conf_t g_conf;
 char g_sys_path[MAX_PATH_LEN];
-int g_listen_sock;
-Pending_handle_t *g_pending_handle;
+Pipeline_t *g_pending_handle;
 
 
 void usage(char * prname)
@@ -101,7 +100,6 @@ int load_conf()
 	return 0;
 }
 
-
 int init()
 {
 	// load_sysconf
@@ -122,82 +120,14 @@ int init()
 
 	srand(time(NULL));
 
-	g_pending_handle = ty_pending_creat();
+	g_pending_handle = pipeline_creat(1024);
 	if (g_pending_handle == NULL)
 	{
-		ty_writelog(TY_LOG_FATAL, "<init> call ty_pending_creat failed!");
+		ty_writelog(TY_LOG_FATAL, "<init> call pipeline_creat failed!");
 		return -1;
 	}
 	return 0;
 }
-
-void *cpool_thread(void *arg)
-{
-	int fdlis, maxfd, ret, sock_work;
-	fd_set fs;
-	bool bNewConn;
-	int on = 1;
-	
-	ty_log_open_r("cpool_thread", NULL);
-
-	if ((fdlis = ty_tcplisten(g_conf.listen_port, 256)) < 0) 
-	{
-		ty_writelog(TY_LOG_FATAL, "fail to listen on port[%d]!", g_conf.listen_port);
-	    for(;;)
-        	raise(SIGKILL);
-       	 //exit(-1);
-       	return NULL;
-	}
-
-
-	const timeval TV_TIMEOUT = {0, 10};
-	timeval tv;
-	
-	while (1) 
-	{
-		FD_ZERO(&fs);
-		FD_SET(fdlis, &fs);
-		
-		maxfd = ty_pending_mask(g_pending_handle, &fs);
-		if (maxfd <= fdlis) 
-		{
-			maxfd = fdlis + 1;
-		}
-
-		tv = TV_TIMEOUT;
-		ret = select(maxfd, &fs, NULL, NULL, &tv);
-		if (ret <= 0)
-			continue;
-
-		if (FD_ISSET(fdlis, &fs))
-			bNewConn = true;
-		else
-			bNewConn = false;
-		
-		if (bNewConn) 
-		{
-			sock_work = ty_accept(fdlis, NULL, NULL);
-ty_writelog(TY_LOG_DEBUG, "<cpool_thread> accept sock[%d]", sock_work);
-			if (sock_work > 0) 
-			{
-				setsockopt(sock_work, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-				if (ty_pending_insert_item(g_pending_handle, sock_work) == -1) 
-				{
-					close(sock_work);
-					ty_writelog(TY_LOG_WARNING, "<cpool_thread> connection num overflow!");
-				}
-			} 
-			else 
-			{
-				ty_writelog(TY_LOG_WARNING, "<cpool_thread> fail to accept connection!");
-			}
-		}
-
-		ty_pending_check_item(g_pending_handle, &fs);
-	}
-	return NULL;
-}
-
 
 int main(int argc, char *argv[])
 {
@@ -208,6 +138,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+	pipeline_listen_port(g_pending_handle, g_conf.listen_port);
 	Thread_t *service_thrdlist = NULL;
 	if ((service_thrdlist = (Thread_t *) calloc(g_conf.thread_count, sizeof(Thread_t))) == NULL) 
     {
@@ -215,17 +146,13 @@ int main(int argc, char *argv[])
         	return 0;
    	}
 
-	pthread_t cpool_tid;
-	pthread_create(&cpool_tid, NULL, cpool_thread, NULL);
-
 	for (int i = 0; i < g_conf.thread_count; i++) 
 	{
     	service_thrdlist[i].thrd_info.thrd_no = i;
         pthread_create(&(service_thrdlist[i].thrd), NULL,
         				service_thread, &(service_thrdlist[i].thrd_info));
-		usleep(10);
     }
-    pthread_join(cpool_tid, NULL);
+	pipeline_run(g_pending_handle);
  	for(int i = 0; i < g_conf.thread_count; i++)
 		pthread_join(service_thrdlist[i].thrd, NULL);
 	return 0;

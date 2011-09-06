@@ -1,4 +1,5 @@
-CPPFLAGS= -O2 -W -Wall -DNDEBUG -D_REENTRANT #-g
+CC=g++
+CPPFLAGS= -O2 -W -Wall -D_REENTRANT -I$(HOME)/svn/system_platform/search/trunk/all_search/as_lib #-DNDEBUG
 LIBFLAGS= -lev
 
 OBJS=net.o pipeline_pool.o

@@ -47,6 +47,7 @@ typedef struct tag_Tread_t
 }Thread_t;
 
 #define OK  			200
+#define NO_REQUEST		204
 #define UI_GET_ERROR  	301
 #define UI_PUT_ERROR   	302
 

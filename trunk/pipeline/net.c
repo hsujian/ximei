@@ -8,8 +8,6 @@
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <sys/un.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <arpa/inet.h>
 
 #include "net.h"
@@ -136,9 +134,14 @@ int socket_send(int fd, const void *buf, int len)
 	do {
 		do {
 			rv = write(fd, pbuf + wlen, nwrite);
-			//DEBUG_LOG("w->%d %d %d [%d:%s]", fd, nwrite, rv, errno, strerror(errno));
-		} while (rv == -1 && ( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
-		//if (errno == EPIPE) { return -1; }
+		} while (rv == -1 && errno == EINTR);
+		DEBUG_LOG("w->%d %d %d %d", fd, nwrite, rv, errno);
+		if (errno == EPIPE) {
+			return -1;
+		}
+		if (rv < 1 && errno == EAGAIN) {
+			return wlen;
+		}
 		if (rv == -1) {
 			return -1;
 		}
@@ -159,12 +162,17 @@ int socket_recv(int fd, void *buf, int len)
 	do {
 		do {
 			rv = read(fd, pbuf + rlen, nread);
-			//DEBUG_LOG("r->%d %d %d [%d:%s]", fd, nread, rv, errno, strerror(errno));
-		} while (rv == -1 && ( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
+		} while (rv == -1 && errno == EINTR);
+		DEBUG_LOG("r->%d %d %d [%d]", fd, nread, rv, errno);
+		if (errno == EPIPE) {
+			return -1;
+		}
 		if (rv == 0) {
 			return rlen;
 		}
-		//if (errno == EPIPE) { return -1; }
+		if (rv == -1 && errno == EAGAIN) {
+			return rlen;
+		}
 		if (rv == -1) {
 			return -1;
 		}

@@ -1,8 +1,11 @@
 #ifndef __PIPELINE_SOCKET_H_
 #define __PIPELINE_SOCKET_H_
 
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/uio.h>
-//#include "ty_log.h"
+#include "ty_log.h"
+
 #ifndef __TY_LOG_H_
 
 #undef DEBUG_LOG

@@ -2,10 +2,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <unistd.h>
-//#include <sys/types.h>
-//#include <fcntl.h>
 #include <string.h>
-#include <errno.h>
 
 #include <ev.h>
 
@@ -39,20 +36,23 @@ struct Pipeline_t {
 static void read_connection(EV_P_ struct ev_io *w, int revents)
 {
 	job_t *job = (job_t *)((char*)w - offsetof(struct job_t, w));
+	Pipeline_t *_this = (Pipeline_t *)ev_userdata (EV_A);
+	DEBUG_LOG("job[%d]->status=%d", job - _this->jobs, job->status);
 	CAS(&(job->status), JOBS_WAIT_REQUEST, JOBS_REQUEST_IN);
+	sched_yield();
 }
 
 static void accept_connection(EV_P_ struct ev_io *w, int revents)
 {
 	int s;
-	do {
+	while(1) {
 		s = accept(w->fd, NULL, NULL);
-		if (s < 0) {
+		if (s < 0 && errno == EAGAIN) {
 			return;
 		}
 		setnonblock(s);
 
-		Pipeline_t *_this = ev_userdata (EV_A);
+		Pipeline_t *_this = (Pipeline_t *)ev_userdata (EV_A);
 		int pos = _this->pos;
 		int i = 0;
 		int status = 0;
@@ -65,7 +65,7 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 				ev_io_start(EV_A_ &(_this->jobs[i].w));
 				status = 1;
 				_this->pos = i + 1;
-				//DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
+				DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
 				break;
 			}
 		}
@@ -77,7 +77,7 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 				if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
 					ev_io_init(&(_this->jobs[i].w), read_connection, s, EV_READ);
 					ev_io_start(EV_A_ &(_this->jobs[i].w));
-					//DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
+					DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
 					status = 1;
 					_this->pos = i + 1;
 					break;
@@ -85,11 +85,11 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 			}
 		}
 		if (!status) {
-			as_lingering_close(s);
+			lingering_close(s);
 			WARNING_LOG("no idle client");
 		}
 
-	} while ( s > -1);
+	}
 }
 
 int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
@@ -105,7 +105,7 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 				*sock = _this->jobs[i].w.fd;
 				*index = i;
 				_this->do_pos = i + 1;
-				WARNING_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
+				DEBUG_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
 				return 0;
 			}
 		}
@@ -117,11 +117,13 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 				*sock = _this->jobs[i].w.fd;
 				*index = i;
 				_this->do_pos = i + 1;
-				WARNING_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
+				DEBUG_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
 				return 0;
 			}
 		}
-		sched_yield();
+		//for(i=2; i--;) {
+			sched_yield();
+		//}
 	}
 	return 0;
 }
@@ -135,20 +137,21 @@ void pipeline_reset_item(Pipeline_t *_this, int index, int keep_alive)
 	_this->jobs[index].status = JOBS_DO_DONE;
 	if (keep_alive) {
 		DEBUG_LOG("keep alive client[%d]->io.fd=%d", index, _this->jobs[index].w.fd);
-		_this->jobs[index].status = JOBS_WAIT_REQUEST;
+		//_this->jobs[index].status = JOBS_WAIT_REQUEST;
 		return;
 	}
 	ev_io_stop(_this->loop, &(_this->jobs[index].w));
-	as_lingering_close( _this->jobs[index].w.fd );
+	lingering_close( _this->jobs[index].w.fd );
 	WARNING_LOG("free client[%d]", index);
 	_this->jobs[index].w.fd = -1;
 	_this->jobs[index].status = JOBS_NO_JOB;
 	_this->pos = index;
+	//sched_yield();
 }
 
 int pipeline_listen(Pipeline_t *_this, const int fd)
 {
-	struct ev_io *w = malloc(sizeof(struct ev_io));
+	struct ev_io *w = (struct ev_io *)malloc(sizeof(struct ev_io));
 	if (IS_NULL(w)) {
 		return -1;
 	}
@@ -188,7 +191,7 @@ Pipeline_t *pipeline_creat(const int max_job_num)
 		return NULL;
 	}
 	_new->max_job_num = mnum;
-	_new->jobs = calloc(mnum, sizeof(job_t));
+	_new->jobs = (job_t *)calloc(mnum, sizeof(job_t));
 	if (IS_NULL(_new->jobs)) {
 		free(_new);
 		return NULL;
@@ -204,5 +207,14 @@ Pipeline_t *pipeline_creat(const int max_job_num)
 	ev_set_userdata(_new->loop, _new);
 
 	return _new;
+}
+
+int pipeline_listen_port(Pipeline_t *_this, const int port)
+{
+	int fd = socket_listen_port(port);
+	if (fd == -1) {
+		return -1;
+	}
+	return pipeline_listen(_this, fd);
 }
 

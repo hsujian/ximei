@@ -20,6 +20,7 @@ void pipeline_reset_item(Pipeline_t *pl, int index, int keep_alive);
 void pipeline_run(Pipeline_t *pl);
 
 int pipeline_listen(Pipeline_t *_this, const int fd);
+int pipeline_listen_port(Pipeline_t *_this, const int port);
 
 #ifdef __cplusplus
 }

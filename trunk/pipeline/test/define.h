@@ -2,12 +2,11 @@
 #define __SERVER_DEFINE_H_
 
 #include <sys/time.h>
-
 #include "ty_log.h"
 #include "ty_conf.h"
-#include "ty_net.h"
-#include "ty_dict.h"
-#include "ty_pending_pool.h"
+
+#include "net.h"
+#include "pipeline_pool.h"
 
 #define PROJECT_NAME 	"server"
 #define SERVER_VERSION  "1.0"
@@ -26,7 +25,7 @@
 
 #define GetTimeCurrent(tv) gettimeofday(&tv, NULL)
 #define SetTimeUsed(tused, tv1, tv2) \
-{ \ 
+{ \
 	    tused  = (tv2.tv_sec-tv1.tv_sec) * 1000; \
         tused += (tv2.tv_usec-tv1.tv_usec) / 1000 + 1; \
 }
