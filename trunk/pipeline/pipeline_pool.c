@@ -23,28 +23,48 @@ enum {
 typedef struct job_t {
 	int status;
 	struct ev_io w;
+	int rlen;
+	int eno;
+	char *buf;
 } job_t;
 
 struct Pipeline_t {
-	int max_job_num;
-	int pos;
-	int do_pos;
+	unsigned max_job_num;
+	unsigned pos;
+	unsigned do_pos;
+	int recv_buf_len;
+	int send_buf_len;
 	struct ev_loop *loop;
 	job_t *jobs;
 };
 
-static void read_connection(EV_P_ struct ev_io *w, int revents)
+static void read_conn(EV_P_ struct ev_io *w, int revents)
 {
+	ev_io_stop(EV_A_ w);
 	job_t *job = (job_t *)((char*)w - offsetof(struct job_t, w));
 	Pipeline_t *_this = (Pipeline_t *)ev_userdata (EV_A);
-	DEBUG_LOG("job[%d]->status=%d", job - _this->jobs, job->status);
-	CAS(&(job->status), JOBS_WAIT_REQUEST, JOBS_REQUEST_IN);
-	sched_yield();
+	int idx = job - _this->jobs;
+	job->rlen = socket_recv(w->fd, job->buf, _this->recv_buf_len);
+	job->eno = errno;
+	if (job->eno == EPIPE || (job->rlen < 1 && job->eno == EAGAIN)) {
+		lingering_close( w->fd );
+		WARNING_LOG("free job[%d]", idx);
+		job->w.fd = -1;
+		job->status = JOBS_NO_JOB;
+		_this->pos = idx;
+		return;
+	}
+
+	DEBUG_LOG("job[%d]->status=%d", idx, job->status);
+	job->status = JOBS_REQUEST_IN;
 }
 
-static void accept_connection(EV_P_ struct ev_io *w, int revents)
+static void accept_conn(EV_P_ struct ev_io *w, int revents)
 {
 	int s;
+	unsigned i;
+	int ncontinue;
+	Pipeline_t *_this = (Pipeline_t *)ev_userdata (EV_A);
 	while(1) {
 		s = accept(w->fd, NULL, NULL);
 		if (s < 0 && errno == EAGAIN) {
@@ -52,72 +72,61 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 		}
 		setnonblock(s);
 
-		Pipeline_t *_this = (Pipeline_t *)ev_userdata (EV_A);
-		int pos = _this->pos;
-		int i = 0;
-		int status = 0;
-		if (pos < 0) {
-			pos = 0;
-		}
-		for (i=pos; i<_this->max_job_num; i++) {
+		ncontinue = 0;
+		for (i=_this->pos; i<_this->max_job_num; i++) {
 			if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
-				ev_io_init(&(_this->jobs[i].w), read_connection, s, EV_READ);
+				ev_io_init(&(_this->jobs[i].w), read_conn, s, EV_READ);
 				ev_io_start(EV_A_ &(_this->jobs[i].w));
-				status = 1;
+				ncontinue = 1;
 				_this->pos = i + 1;
 				DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
 				break;
 			}
 		}
-		if (!status) {
-			if (pos > _this->max_job_num) {
-				pos = _this->max_job_num;
-			}
-			for (i=0; i<pos; i++) {
-				if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
-					ev_io_init(&(_this->jobs[i].w), read_connection, s, EV_READ);
-					ev_io_start(EV_A_ &(_this->jobs[i].w));
-					DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
-					status = 1;
-					_this->pos = i + 1;
-					break;
-				}
+		if (ncontinue) {
+			continue;
+		}
+		for (i=0; i<_this->max_job_num; i++) {
+			if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
+				ev_io_init(&(_this->jobs[i].w), read_conn, s, EV_READ);
+				ev_io_start(EV_A_ &(_this->jobs[i].w));
+				DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
+				ncontinue = 1;
+				_this->pos = i + 1;
+				break;
 			}
 		}
-		if (!status) {
-			lingering_close(s);
-			WARNING_LOG("no idle client");
+		if (ncontinue) {
+			continue;
 		}
-
+		lingering_close(s);
+		WARNING_LOG("no idle client");
 	}
 }
 
-int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
+int pipeline_fetch_item(Pipeline_t *_this, int *idx, int *sock, const char **pbuf, int *rlen)
 {
+	unsigned i;
 	for (;;) {
-		int i = 0;
-		int pos = _this->do_pos;
-		if (pos < 0) {
-			pos = 0;
-		}
-		for (i=pos; i<_this->max_job_num; i++) {
+		for (i=_this->do_pos; i<_this->max_job_num; i++) {
 			if (CAS(&(_this->jobs[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
 				*sock = _this->jobs[i].w.fd;
-				*index = i;
+				*idx = i;
+				*pbuf = (const char *) _this->jobs[i].buf;
+				*rlen = _this->jobs[i].rlen;
 				_this->do_pos = i + 1;
-				DEBUG_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
+				DEBUG_LOG("fetch client[%d]->io.fd=%d", *idx, *sock);
 				return 0;
 			}
 		}
-		if (pos > _this->max_job_num) {
-			pos = _this->max_job_num;
-		}
-		for (i=0; i<pos; i++) {
+		for (i=0; i<_this->max_job_num; i++) {
 			if (CAS(&(_this->jobs[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
 				*sock = _this->jobs[i].w.fd;
-				*index = i;
+				*idx = i;
+				*pbuf = (const char *) _this->jobs[i].buf;
+				*rlen = _this->jobs[i].rlen;
 				_this->do_pos = i + 1;
-				DEBUG_LOG("fetch client[%d]->io.fd=%d", *index, *sock);
+				DEBUG_LOG("fetch client[%d]->io.fd=%d", *idx, *sock);
 				return 0;
 			}
 		}
@@ -128,25 +137,24 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 	return 0;
 }
 
-void pipeline_reset_item(Pipeline_t *_this, int index, int keep_alive)
+void pipeline_reset_item(Pipeline_t *_this, int idx, int keep_alive)
 {
-	if (index < 0 || index >= _this->max_job_num) {
-		WARNING_LOG("index[%d] not in [0, %d)", index, _this->max_job_num);
+	if (idx < 0 || idx >= _this->max_job_num) {
+		WARNING_LOG("idx[%d] not in [0, %d)", idx, _this->max_job_num);
 		return;
 	}
-	_this->jobs[index].status = JOBS_DO_DONE;
+	_this->jobs[idx].status = JOBS_DO_DONE;
 	if (keep_alive) {
-		DEBUG_LOG("keep alive client[%d]->io.fd=%d", index, _this->jobs[index].w.fd);
-		//_this->jobs[index].status = JOBS_WAIT_REQUEST;
+		DEBUG_LOG("keep alive client[%d]->io.fd=%d", idx, _this->jobs[idx].w.fd);
+		_this->jobs[idx].status = JOBS_WAIT_REQUEST;
+		ev_io_start(_this->loop, &(_this->jobs[idx].w));
 		return;
 	}
-	ev_io_stop(_this->loop, &(_this->jobs[index].w));
-	lingering_close( _this->jobs[index].w.fd );
-	WARNING_LOG("free client[%d]", index);
-	_this->jobs[index].w.fd = -1;
-	_this->jobs[index].status = JOBS_NO_JOB;
-	_this->pos = index;
-	//sched_yield();
+	lingering_close( _this->jobs[idx].w.fd );
+	DEBUG_LOG("free jobs[%d]", idx);
+	_this->jobs[idx].w.fd = -1;
+	_this->jobs[idx].status = JOBS_NO_JOB;
+	_this->pos = idx;
 }
 
 int pipeline_listen(Pipeline_t *_this, const int fd)
@@ -156,7 +164,7 @@ int pipeline_listen(Pipeline_t *_this, const int fd)
 		return -1;
 	}
 	setnonblock(fd);
-	ev_io_init(w, accept_connection, fd, EV_READ);
+	ev_io_init(w, accept_conn, fd, EV_READ);
 	ev_io_start(_this->loop, w);
 	return 0;
 }
@@ -177,7 +185,7 @@ int pipeline_del(Pipeline_t *_this)
 	return 0;
 }
 
-Pipeline_t *pipeline_creat(const int max_job_num)
+Pipeline_t *pipeline_creat(const int max_job_num, const int recv_buf_len, const int send_buf_len)
 {
 	int mnum = 0;
 	if (max_job_num < 1) {
@@ -191,14 +199,28 @@ Pipeline_t *pipeline_creat(const int max_job_num)
 		return NULL;
 	}
 	_new->max_job_num = mnum;
+	_new->recv_buf_len = recv_buf_len;
+	_new->send_buf_len = send_buf_len;
 	_new->jobs = (job_t *)calloc(mnum, sizeof(job_t));
 	if (IS_NULL(_new->jobs)) {
 		free(_new);
 		return NULL;
 	}
 
+	char *buf = (char *)malloc((recv_buf_len + send_buf_len) * mnum);
+	if (IS_NULL(buf)) {
+		free(_new->jobs);
+		free(_new);
+		return NULL;
+	}
+	int i;
+	for (i=mnum; i--;) {
+		_new->jobs[i].buf = buf + (recv_buf_len + send_buf_len) * i;
+	}
+
 	_new->loop = ev_loop_new (EVBACKEND_EPOLL);
 	if (IS_NULL( _new->loop )) {
+		free(buf);
 		free(_new->jobs);
 		free(_new);
 		return NULL;

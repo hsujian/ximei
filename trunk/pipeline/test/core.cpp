@@ -85,6 +85,7 @@ void *service_thread(void *pti)
 	int qlen = 0;
 	char *p = NULL;
 
+	const char *request = NULL;
 	int max_read_size = 1024*1024;
 	char *read_buf = (char *)malloc(max_read_size);
 	if (read_buf == NULL) {
@@ -100,24 +101,13 @@ void *service_thread(void *pti)
 	while (1) {
 		memset(&loginfo, 0, sizeof(Log_info_t));
 		loginfo.status = OK;
-		pipeline_fetch_item(g_pending_handle, &s_index, &sock);
+		pipeline_fetch_item(g_pending_handle, &s_index, &sock, (const char **)&request, &rlen);
 		GetTimeCurrent(tvstart);
-
-		ret = socket_recv(sock, read_buf, max_read_size);
-		if (ret < 0) {
-			loginfo.status = UI_GET_ERROR;
-			goto message_end;
-		}
-		if (ret == 0 && errno == EAGAIN) {
-			loginfo.status = NO_REQUEST;
-			goto message_end;
-		}
-		rlen = ret;
-		DEBUG_LOG("recv %d errno=%d", rlen, errno);
+		DEBUG_LOG("recv %d", rlen);
 
 		q = 0;
 		qlen = 0;
-		p = strstr(read_buf, "q=");
+		p = strstr(request, "q=");
 		if (p) {
 			q = atoi(p+2);
 			qlen = sprintf(read_buf, "%d", q);
@@ -133,6 +123,9 @@ send_to_UI:
 		ret = socket_send(sock, read_buf, rlen);
 		if (ret < 0)
 			loginfo.status = UI_PUT_ERROR;
+		if (errno == EPIPE) {
+			loginfo.status = UI_PUT_ERROR;
+		}
 		GetTimeCurrent(tvend);
 		SetTimeUsed(timeused, tvstart, tvend);
 message_end:					

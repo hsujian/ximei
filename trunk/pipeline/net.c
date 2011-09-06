@@ -147,6 +147,9 @@ int socket_send(int fd, const void *buf, int len)
 		}
 		nwrite -= rv;
 		wlen += rv;
+		if (errno == EAGAIN) {
+			return wlen;
+		}
 	} while(nwrite > 0);
 
 	return wlen;
@@ -163,8 +166,11 @@ int socket_recv(int fd, void *buf, int len)
 		do {
 			rv = read(fd, pbuf + rlen, nread);
 		} while (rv == -1 && errno == EINTR);
-		DEBUG_LOG("r->%d %d %d [%d]", fd, nread, rv, errno);
+		DEBUG_LOG("r->%d %d/%d/%d [%d]", fd, rv, rlen, nread, errno);
 		if (errno == EPIPE) {
+			return -1;
+		}
+		if (rv == 0 && rlen == 0 && errno == EAGAIN) {
 			return -1;
 		}
 		if (rv == 0) {
@@ -178,6 +184,9 @@ int socket_recv(int fd, void *buf, int len)
 		}
 		nread -= rv;
 		rlen += rv;
+		if (errno == EAGAIN) {
+			return rlen;
+		}
 	} while (nread > 0);
 	return rlen;
 }

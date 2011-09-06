@@ -120,7 +120,7 @@ int init()
 
 	srand(time(NULL));
 
-	g_pending_handle = pipeline_creat(1024);
+	g_pending_handle = pipeline_creat(1024, 1024, 0);
 	if (g_pending_handle == NULL)
 	{
 		ty_writelog(TY_LOG_FATAL, "<init> call pipeline_creat failed!");

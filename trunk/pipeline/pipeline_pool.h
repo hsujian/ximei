@@ -9,13 +9,13 @@ extern "C" {
 
 typedef struct Pipeline_t Pipeline_t;
 
-Pipeline_t *pipeline_creat(const int max_job_num);
+Pipeline_t *pipeline_creat(const int max_job_num, const int recv_buf_len, const int send_buf_len);
 
 int pipeline_del(Pipeline_t *pl);
 
-int pipeline_fetch_item(Pipeline_t *pl, int *index, int *sock);
+int pipeline_fetch_item(Pipeline_t *pl, int *idx, int *sock, const char **pbuf, int *rlen);
 
-void pipeline_reset_item(Pipeline_t *pl, int index, int keep_alive);
+void pipeline_reset_item(Pipeline_t *pl, int idx, int keep_alive);
 
 void pipeline_run(Pipeline_t *pl);
 
