@@ -2,8 +2,15 @@
 #define __PIPELINE_SOCKET_H_
 
 #include <sys/uio.h>
-#include <sys/types.h>
-#include <unistd.h>
+//#include "ty_log.h"
+#ifndef __TY_LOG_H_
+
+#undef DEBUG_LOG
+#undef WARNING_LOG
+#define DEBUG_LOG(fmt, arg...)
+#define WARNING_LOG(fmt, arg...)
+
+#endif
 
 #ifdef __cplusplus
 extern "C" {

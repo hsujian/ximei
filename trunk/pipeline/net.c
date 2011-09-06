@@ -2,21 +2,21 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
+#include <sys/un.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 #include "net.h"
 
 int setnonblock(int fd)
 {
-	int flags;
-
-	flags = fcntl(fd, F_GETFL);
+	int flags = fcntl(fd, F_GETFL);
 	if (flags == -1) {
 		return fcntl(fd, F_SETFL, O_NONBLOCK);
 	}
@@ -111,7 +111,7 @@ int socket_sendv(int fd, struct iovec *vec, int nvec)
 		bytes += rv;
 		/* recalculate vec to deal with partial writes */
 		while (rv > 0) {
-			if (rv < vec[i].iov_len) {
+			if (rv < (int)vec[i].iov_len) {
 				vec[i].iov_base = (char *) vec[i].iov_base + rv;
 				vec[i].iov_len -= rv;
 				rv = 0;
@@ -182,18 +182,19 @@ int socket_connect(const char *ip, const int port, int domain, int type, int pro
 	}
 	if (domain == AF_INET) {
 		struct sockaddr_in addr;
-		bzero(&addr,sizeof(addr));
-		addr.sin_family = domain;
+		bzero(&addr, sizeof(struct sockaddr));
+		addr.sin_family = AF_INET;
 		addr.sin_port = htons( port );
 		addr.sin_addr.s_addr = inet_addr(ip);
-		return connect(s, (struct sockaddr *)&addr, sizeof(addr));
+		return connect(s, (struct sockaddr *)&addr, sizeof(struct sockaddr));
 	}
 	if (domain == AF_UNIX) {
 		struct sockaddr_un addr;
-		bzero(&addr, sizeof(addr));
-		addr.sun_family = domain;
-		snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", ip);
-		return connect(s, (struct sockaddr *)&addr, sizeof(addr));
+		bzero(&addr, sizeof(struct sockaddr));
+		addr.sun_family = AF_UNIX;
+		strncpy(addr.sun_path, ip, sizeof(addr.sun_path));
+		addr.sun_path[ sizeof(addr.sun_path) - 1 ] = '\0';
+		return connect(s, (struct sockaddr *)&addr, SUN_LEN(&addr));
 	}
 	return -1;
 }

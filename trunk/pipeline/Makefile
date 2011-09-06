@@ -1,7 +1,7 @@
-CPPFLAGS= -Wl,--rpath -Wl,./ -O2 -Wall -DNDEBUG -D_REENTRANT #-g
+CPPFLAGS= -O2 -W -Wall -DNDEBUG -D_REENTRANT #-g
 LIBFLAGS= -lev
 
-OBJS=pipeline_pool.o net.o
+OBJS=net.o pipeline_pool.o
 
 LIBO=libpipeline_pool.a
 

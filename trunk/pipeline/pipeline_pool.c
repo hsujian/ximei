@@ -2,42 +2,31 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <pthread.h>
-#include <fcntl.h>
+//#include <sys/types.h>
+//#include <fcntl.h>
 #include <string.h>
 #include <errno.h>
-#include <netinet/tcp.h>
-#include <netinet/in.h>
 
 #include <ev.h>
 
 #include "pipeline_pool.h"
-
-#include "ty_log.h"
 
 #define CAS __sync_bool_compare_and_swap
 
 #define IS_NULL(_ptr) (NULL == _ptr)
 
 enum {
-	JOBS_FREE=0,
-	JOBS_WAIT_READ,
-	JOBS_CAN_READ,
-	JOBS_INIT,
-	JOBS_DO_READ,
+	JOBS_NO_JOB=0,
+	JOBS_WAIT_REQUEST,
+	JOBS_REQUEST_IN,
+	JOBS_DO_JOB,
 	JOBS_DO_DONE
 };
-
-#define IS_CLIENT_IN_QUEUE(_C) (AS_CLIENT_QUEUE == _C->status)
 
 typedef struct job_t {
 	int status;
 	struct ev_io w;
 } job_t;
-
-typedef struct Pipeline_t Pipeline_t;
 
 struct Pipeline_t {
 	int max_job_num;
@@ -50,7 +39,7 @@ struct Pipeline_t {
 static void read_connection(EV_P_ struct ev_io *w, int revents)
 {
 	job_t *job = (job_t *)((char*)w - offsetof(struct job_t, w));
-	CAS(&(job->status), JOBS_WAIT_READ, JOBS_CAN_READ);
+	CAS(&(job->status), JOBS_WAIT_REQUEST, JOBS_REQUEST_IN);
 }
 
 static void accept_connection(EV_P_ struct ev_io *w, int revents)
@@ -67,8 +56,11 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 		int pos = _this->pos;
 		int i = 0;
 		int status = 0;
+		if (pos < 0) {
+			pos = 0;
+		}
 		for (i=pos; i<_this->max_job_num; i++) {
-			if (CAS(&(_this->jobs[i].status), JOBS_FREE, JOBS_INIT)) {
+			if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
 				ev_io_init(&(_this->jobs[i].w), read_connection, s, EV_READ);
 				ev_io_start(EV_A_ &(_this->jobs[i].w));
 				status = 1;
@@ -78,8 +70,11 @@ static void accept_connection(EV_P_ struct ev_io *w, int revents)
 			}
 		}
 		if (!status) {
+			if (pos > _this->max_job_num) {
+				pos = _this->max_job_num;
+			}
 			for (i=0; i<pos; i++) {
-				if (CAS(&(_this->jobs[i].status), JOBS_FREE, JOBS_INIT)) {
+				if (CAS(&(_this->jobs[i].status), JOBS_NO_JOB, JOBS_WAIT_REQUEST)) {
 					ev_io_init(&(_this->jobs[i].w), read_connection, s, EV_READ);
 					ev_io_start(EV_A_ &(_this->jobs[i].w));
 					//DEBUG_LOG("accept job[%d]->w.fd=%d", i, s);
@@ -102,8 +97,11 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 	for (;;) {
 		int i = 0;
 		int pos = _this->do_pos;
+		if (pos < 0) {
+			pos = 0;
+		}
 		for (i=pos; i<_this->max_job_num; i++) {
-			if (CAS(&(_this->jobs[i].status), JOBS_CAN_READ, JOBS_DO_READ)) {
+			if (CAS(&(_this->jobs[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
 				*sock = _this->jobs[i].w.fd;
 				*index = i;
 				_this->do_pos = i + 1;
@@ -111,8 +109,11 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 				return 0;
 			}
 		}
+		if (pos > _this->max_job_num) {
+			pos = _this->max_job_num;
+		}
 		for (i=0; i<pos; i++) {
-			if (CAS(&(_this->jobs[i].status), JOBS_CAN_READ, JOBS_DO_READ)) {
+			if (CAS(&(_this->jobs[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
 				*sock = _this->jobs[i].w.fd;
 				*index = i;
 				_this->do_pos = i + 1;
@@ -125,7 +126,7 @@ int pipeline_fetch_item(Pipeline_t *_this, int *index, int *sock)
 	return 0;
 }
 
-void pipeline_reset_item(Pipeline_t *_this, int index, bool keep_alive)
+void pipeline_reset_item(Pipeline_t *_this, int index, int keep_alive)
 {
 	if (index < 0 || index >= _this->max_job_num) {
 		WARNING_LOG("index[%d] not in [0, %d)", index, _this->max_job_num);
@@ -134,21 +135,24 @@ void pipeline_reset_item(Pipeline_t *_this, int index, bool keep_alive)
 	_this->jobs[index].status = JOBS_DO_DONE;
 	if (keep_alive) {
 		DEBUG_LOG("keep alive client[%d]->io.fd=%d", index, _this->jobs[index].w.fd);
-		_this->jobs[index].status = JOBS_WAIT_READ;
+		_this->jobs[index].status = JOBS_WAIT_REQUEST;
 		return;
 	}
 	ev_io_stop(_this->loop, &(_this->jobs[index].w));
 	as_lingering_close( _this->jobs[index].w.fd );
 	WARNING_LOG("free client[%d]", index);
 	_this->jobs[index].w.fd = -1;
-	_this->jobs[index].status = JOBS_FREE;
+	_this->jobs[index].status = JOBS_NO_JOB;
 	_this->pos = index;
 }
 
 int pipeline_listen(Pipeline_t *_this, const int fd)
 {
-	setnonblock(fd);
 	struct ev_io *w = malloc(sizeof(struct ev_io));
+	if (IS_NULL(w)) {
+		return -1;
+	}
+	setnonblock(fd);
 	ev_io_init(w, accept_connection, fd, EV_READ);
 	ev_io_start(_this->loop, w);
 	return 0;
