@@ -70,6 +70,9 @@ static void accept_conn(EV_P_ struct ev_io *w, int revents)
 		if (s < 0 && errno == EAGAIN) {
 			return;
 		}
+		if (s < 0) {
+			continue;
+		}
 		setnonblock(s);
 
 		ncontinue = 0;
