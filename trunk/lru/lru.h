@@ -7,6 +7,8 @@
 extern "C" {
 #endif
 
+//	typedef void (*data_free_fn)(void *data, uint32_t size);
+
 	typedef struct lru_find_t {
 		uint32_t key1;
 		uint32_t key2;
@@ -16,11 +18,12 @@ extern "C" {
 
 	typedef struct lru_t lru_t;
 
-	int lru_set(lru_t *lru, lru_find_t *set, uint32_t num);
-	int lru_get(lru_t *lru, lru_find_t *get, uint32_t num);
-	int lru_del(lru_t *lru, lru_find_t *del, uint32_t num);
+	int lru_set(lru_t *lru, lru_find_t *set, int num);
+	int lru_get(lru_t *lru, lru_find_t *get, int num);
+	int lru_del(lru_t *lru, uint32_t key1, uint32_t key2);
 	void lru_free(lru_t *lru);
-	lru_t *lru_new(uint32_t lru_size, uint32_t hash);
+//	void lru_set_data_free_fn(lru_t *lru, data_free_fn free_fn);
+	lru_t *lru_new(int lru_size, int hash);
 	void lru_lock(lru_t *lru);
 	void lru_unlock(lru_t *lru);
 

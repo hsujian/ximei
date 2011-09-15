@@ -1,18 +1,19 @@
 #include <stdlib.h>
 #include <string.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <assert.h>
 
 #include "lru.h"
 
 typedef struct node_t {
 	uint32_t key1;
 	uint32_t key2;
-	node_t *prev;
-	node_t *next;
-	node_t *lru_prev;
-	node_t *lru_next;
+	struct node_t *hash_next;
+	struct node_t *lru_prev;
+	struct node_t *lru_next;
 	uint32_t size;
 	void *data;
 } node_t;
@@ -21,15 +22,13 @@ struct lru_t {
 	volatile int mutex;
 	int hash;
 	int size;
-	int refs;
-	node_t *head;
-	node_t *tail;
+	node_t *lru_head;
+	node_t *lru_tail;
 	node_t *nodes;
 	node_t *idle;
 	node_t **barrel;
+//	data_free_fn data_free_fn;
 };
-
-static void lru_node_free(node_t *node);
 
 #ifndef NDEBUG
 # define DEBUG_LOG(fmt, arg...) printf("<%s(%s:%d)> " fmt, __FUNCTION__, __FILE__, __LINE__, ##arg)
@@ -37,77 +36,124 @@ static void lru_node_free(node_t *node);
 # define DEBUG_LOG(fmt, arg...)
 #endif
 
-#define LRU_NODE_REMOVE(head, prev, node) do {\
-	if ( ! (node)->prev ) {\
-		(head) = (node)->next;\
-		if ( (node)->next ) {\
-			(node)->next->prev = NULL;\
-		}\
-	} else {\
-		(node)->prev->next = (node)->next;\
-		if ( (node)->next ) {\
-			(node)->next->prev = (node)->prev;\
-		}\
-	}\
-} while(0)
+#define HASH_PNEXT(node) (node)->hash_next
+#define HASH_NNEXT(node) (node).hash_next
+#define IDLE_PNEXT(node) (node)->hash_next
 
-static int lru_node_move2head(lru_t *lru, node_t *node)
+static inline void lru_node_free(lru_t *lru, node_t *node);
+static inline node_t *lru_node_new(lru_t *lru);
+
+static inline void lru_node_move2idle(lru_t *lru, node_t *node, int barrel_idx, node_t *hash_prev)
 {
-	if (!lru || !node || lru->head == node) {
-		return 0;
+	assert(lru != NULL);
+	assert(node != NULL);
+	assert(barrel_idx > -1);
+	//barrel;
+	if (lru->barrel[barrel_idx] == node) {
+		lru->barrel[barrel_idx] = HASH_PNEXT (node);
+	} else {
+		assert(hash_prev != NULL);
+		HASH_PNEXT( hash_prev ) = HASH_PNEXT (node);
+	}
+	//lru queue
+	if ( ! node->lru_prev ) {
+		lru->lru_head = node->lru_next;
+		lru->lru_head->lru_prev = NULL;
+		if (lru->lru_tail == node) {
+			lru->lru_tail = NULL;
+		}
+	} else {
+		node->lru_prev->lru_next = node->lru_next;
+		if ( node->lru_next ) {
+			node->lru_next->lru_prev = node->lru_prev;
+		} else {
+			lru->lru_tail = node->lru_prev;
+		}
+	}
+	lru_node_free(lru, node);
+}
+
+static inline void lru_node_move2lru_head(lru_t *lru, node_t *node)
+{
+	assert(lru != NULL);
+	assert(node != NULL);
+	if (lru->lru_head == node) {
+		return;
 	}
 	node->lru_prev->lru_next = node->lru_next;
 	if (node->lru_next) {
 		node->lru_next->lru_prev = node->lru_prev;
-	}
-	if (lru->tail == node) {
-		lru->tail == node->lru_prev;
+	} else {
+		lru->lru_tail = node->lru_prev;
 	}
 	node->lru_prev = NULL;
-	node->lru_next = lru->head;
-	lru->head->lru_prev = node;
-	lru->head = node;
-	return 0;
+	node->lru_next = lru->lru_head;
+	lru->lru_head->lru_prev = node;
+	lru->lru_head = node;
+	return;
 }
 
-void lru_lock(lru_t *lru)
+inline void lru_lock(lru_t *lru)
 {
+	assert(lru != NULL);
 	while(lru) {
 		if (__sync_bool_compare_and_swap(&lru->mutex, 0, 1))
 			return;
+		sched_yield();
 	}
 }
 
-void lru_unlock(lru_t *lru)
+inline void lru_unlock(lru_t *lru)
 {
+	assert(lru != NULL);
 	if (lru) {
 		lru->mutex = 0;
 	}
 }
 
-int lru_set(lru_t *lru, node_t *node, int num)
+int lru_set(lru_t *lru, lru_find_t *node, int num)
 {
-	if (!(lru)) return -1;
-	int idx = (key1 + key2) % lru->hash;
-	node_t *node = lru->barrel[idx];
-	while( node ) {
-		if (node->key1 != key1 || node->key2 != key2) {
-			node = node->next;
-			continue;
-		}
-		if ( ! node->prev ) {
-			lru->barrel[idx] = node->next;
-			if ( node->next ) {
-				node->next->prev = NULL;
+	if (!lru) return -1;
+	int i, idx, find;
+	node_t *seek;
+	for (i=0; i<num; i++) {
+		idx = (node[i].key1 + node[i].key2) % lru->hash;
+		seek = lru->barrel[idx];
+		find = 0;
+		while( seek ) {
+			if (seek->key1 != node[i].key1 || seek->key2 != node[i].key2) {
+				seek = HASH_PNEXT (seek);
+				continue;
 			}
-		} else {
-			node->prev->next = node->next;
-			if ( node->next ) {
-				node->next->prev = node->prev;
+			find = 1;
+			if (seek->data != node[i].data) {
+				free(seek->data);
+			}
+			seek->data = node[i].data;
+			seek->size = node[i].size;
+			lru_node_move2lru_head(lru, seek);
+			break;
+		}
+		if (find == 0) {
+			node_t *new_node = lru_node_new(lru);
+			new_node->key1 = node[i].key1;
+			new_node->key2 = node[i].key2;
+			new_node->data = node[i].data;
+			new_node->size = node[i].size;
+
+			HASH_PNEXT (new_node) = lru->barrel[idx];
+			lru->barrel[idx] = new_node;
+			
+			new_node->lru_prev = NULL;
+			new_node->lru_next = lru->lru_head;
+			if (lru->lru_head) {
+				lru->lru_head->lru_prev = new_node;
+			}
+			lru->lru_head = new_node;
+			if (! lru->lru_tail ) {
+				lru->lru_tail = lru->lru_head;
 			}
 		}
-		lru->refs--;
-		break;
 	}
 	return 0;
 }
@@ -115,54 +161,74 @@ int lru_set(lru_t *lru, node_t *node, int num)
 int lru_get(lru_t *lru, lru_find_t *get, int num)
 {
 	if (!(lru)) return -1;
-	int i;
-	int idx;
+	int i,
+		idx,
+		gnum = 0;
 	node_t *n;
 	for (i=num; i--;) {
 		idx = (get[i].key1 + get[i].key2) % lru->hash;
 		n = lru->barrel[idx];
 		while( n ) {
 			if (n->key1 != get[i].key1 || n->key2 != get[i].key2) {
-				n = n->next;
+				n = HASH_PNEXT (n);
 				continue;
 			}
 			get[i].size = n->size;
 			get[i].data = n->data;
-			lru_node_move2head(lru, n);
+			lru_node_move2lru_head(lru, n);
+			gnum++;
 			break;
 		}
 		get[i].size = 0;
 		get[i].data = NULL;
 	}
-	return 0;
+	return gnum;
 }
 
 int lru_del(lru_t *lru, uint32_t key1, uint32_t key2)
 {
-	if (!(lru)) return -1;
+	if (!lru) return -1;
 	int idx = (key1 + key2) % lru->hash;
 	node_t *node = lru->barrel[idx];
+	node_t *prev_node = NULL;
 	while( node ) {
 		if (node->key1 != key1 || node->key2 != key2) {
-			node = node->next;
+			prev_node = node;
+			node = HASH_PNEXT (node);
 			continue;
 		}
-		LRU_NODE_REMOVE( lru->barrel[idx], node );
-		lru_node_free( node );
-		lru->refs--;
+		lru_node_move2idle(lru, node, idx, prev_node);
 		break;
 	}
 	return 0;
 }
 
-void lru_node_free(node_t *node)
+static inline node_t *lru_node_new(lru_t *lru)
 {
-	if (node) {
-		if (node->data) {
-			free(node->data);
-		}
-		free(node);
+	assert(lru != NULL);
+	if ( lru->idle ) {
+		node_t *node = lru->idle;
+		lru->idle = IDLE_PNEXT (lru->idle);
+		return node;
 	}
+
+	node_t *node = lru->lru_tail;
+	assert(node != NULL);
+	lru->lru_tail = lru->lru_tail->lru_prev;
+	assert(lru->lru_tail != NULL);
+	lru->lru_tail->lru_next = NULL;
+	return node;
+}
+
+static inline void lru_node_free(lru_t *lru, node_t *node)
+{
+	assert(lru != NULL);
+	assert(node != NULL);
+	if (node->data) {
+		free(node->data);
+	}
+	IDLE_PNEXT (node) = lru->idle;
+	lru->idle = node;
 }
 
 void lru_free(lru_t *lru)
@@ -200,9 +266,8 @@ lru_t *lru_new(int lru_size, int hash)
 	_new->mutex = 0;
 #endif
 	_new->size = lru_size;
-	_new->refs = 0;
-	_new->head = NULL;
-	_new->tail = NULL;
+	_new->lru_head = NULL;
+	_new->lru_tail = NULL;
 	_new->hash = hash;
 	_new->nodes = (node_t *) calloc(lru_size, sizeof(node_t));
 	if ( ! _new->nodes ) {
@@ -210,9 +275,9 @@ lru_t *lru_new(int lru_size, int hash)
 		return NULL;
 	}
 	int i;
-	_new->nodes[lru_size - 1].next = NULL;
+	HASH_NNEXT (_new->nodes[lru_size - 1]) = NULL;
 	for (i=lru_size - 1; i--;) {
-		_new->nodes[i].next = _new->nodes[i+1];
+		HASH_NNEXT (_new->nodes[i]) = &(_new->nodes[i+1]);
 	}
 	_new->idle = _new->nodes;
 

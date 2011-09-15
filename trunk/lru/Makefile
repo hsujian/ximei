@@ -1,10 +1,10 @@
-CC=g++
-CPPFLAGS= -O2 -W -Wall -D_REENTRANT -I$(HOME)/svn/system_platform/search/trunk/all_search/as_lib #-DNDEBUG
-LIBFLAGS= -lev
+CC=gcc
+CFLAGS= -O2 -W -Wall -D_REENTRANT #-DNDEBUG
+LFLAGS=
 
-OBJS=net.o pipeline_pool.o
+OBJS=lru.o
 
-LIBO=libpipeline_pool.a
+LIBO=liblru.a
 
 all	: $(LIBO)
 
