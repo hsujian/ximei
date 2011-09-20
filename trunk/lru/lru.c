@@ -262,9 +262,7 @@ lru_t *lru_new(int lru_size, int hash)
 	if ( ! _new ) {
 		return NULL;
 	}
-#ifdef _XDJ_LRU_NEED_MUTEX
 	_new->mutex = 0;
-#endif
 	_new->size = lru_size;
 	_new->lru_head = NULL;
 	_new->lru_tail = NULL;
