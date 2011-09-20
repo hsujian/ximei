@@ -27,7 +27,7 @@ struct lru_t {
 	node_t *nodes;
 	node_t *idle;
 	node_t **barrel;
-//	data_free_fn data_free_fn;
+	/* data_free_fn data_free_fn; */
 };
 
 #ifndef NDEBUG
@@ -93,7 +93,7 @@ static inline void lru_node_move2lru_head(lru_t *lru, node_t *node)
 	return;
 }
 
-inline void lru_lock(lru_t *lru)
+static inline void lru_lock(lru_t *lru)
 {
 	assert(lru != NULL);
 	while(lru) {
@@ -103,7 +103,7 @@ inline void lru_lock(lru_t *lru)
 	}
 }
 
-inline void lru_unlock(lru_t *lru)
+static inline void lru_unlock(lru_t *lru)
 {
 	assert(lru != NULL);
 	if (lru) {
@@ -114,6 +114,7 @@ inline void lru_unlock(lru_t *lru)
 int lru_set(lru_t *lru, lru_find_t *node, int num)
 {
 	if (!lru) return -1;
+	lru_lock(lru);
 	int i, idx, find;
 	node_t *seek;
 	for (i=0; i<num; i++) {
@@ -155,12 +156,14 @@ int lru_set(lru_t *lru, lru_find_t *node, int num)
 			}
 		}
 	}
+	lru_unlock(lru);
 	return 0;
 }
 
 int lru_get(lru_t *lru, lru_find_t *get, int num)
 {
 	if (!(lru)) return -1;
+	lru_lock(lru);
 	int i,
 		idx,
 		gnum = 0;
@@ -182,12 +185,14 @@ int lru_get(lru_t *lru, lru_find_t *get, int num)
 		get[i].size = 0;
 		get[i].data = NULL;
 	}
+	lru_unlock(lru);
 	return gnum;
 }
 
 int lru_del(lru_t *lru, uint32_t key1, uint32_t key2)
 {
 	if (!lru) return -1;
+	lru_lock(lru);
 	int idx = (key1 + key2) % lru->hash;
 	node_t *node = lru->barrel[idx];
 	node_t *prev_node = NULL;
@@ -200,6 +205,7 @@ int lru_del(lru_t *lru, uint32_t key1, uint32_t key2)
 		lru_node_move2idle(lru, node, idx, prev_node);
 		break;
 	}
+	lru_unlock(lru);
 	return 0;
 }
 
