@@ -6,7 +6,7 @@
 #include "ty_conf.h"
 
 #include "net.h"
-#include "pipeline_pool.h"
+#include "greeting_bonze.h"
 
 #define PROJECT_NAME 	"server"
 #define SERVER_VERSION  "1.0"
@@ -17,6 +17,9 @@
 #ifndef MAX_PATH_LEN
 #define MAX_PATH_LEN 256
 #endif
+
+#define MAX_REQUEST_LEN 5120
+#define MAX_RESPONSE_LEN 5120
 
 #define DEFAULT_LOG_PATH "../log"
 #define DEFAULT_LOG_EVENT 0xff

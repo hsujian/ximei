@@ -1,8 +1,8 @@
-INC_PATH=$(HOME)/svn/system_platform/search/trunk/all_search/as_lib
-LIB_PATH=$(HOME)/svn/system_platform/search/trunk/all_search/as_lib
+INC_PATH=$(HOME)/svn/search/trunk/all_search/as_lib
+LIB_PATH=$(HOME)/svn/search/trunk/all_search/as_lib
 
-CPPFLAGS= -O2 -Wall -D_REENTRANT -I$(INC_PATH) -I../ #-DNDEBUG
-LIBFLAGS= -lev -L../ -lpipeline_pool -L$(LIB_PATH) -ltylib  -ltylog -lpthread
+CPPFLAGS= -O2 -Wall -D_REENTRANT -I$(INC_PATH) -I../ -pthread #-DNDEBUG
+LIBFLAGS= -L../ -lgreeting_bonze -lrt -L$(LIB_PATH) -ltylib  -ltylog -lpthread
 
 OBJS=main.o core.o
 
