@@ -171,6 +171,8 @@ int lru_get(lru_t *lru, lru_find_t *get, int num)
 	for (i=num; i--;) {
 		idx = (get[i].key1 + get[i].key2) % lru->hash;
 		n = lru->barrel[idx];
+		get[i].size = 0;
+		get[i].data = NULL;
 		while( n ) {
 			if (n->key1 != get[i].key1 || n->key2 != get[i].key2) {
 				n = HASH_PNEXT (n);
@@ -182,8 +184,6 @@ int lru_get(lru_t *lru, lru_find_t *get, int num)
 			gnum++;
 			break;
 		}
-		get[i].size = 0;
-		get[i].data = NULL;
 	}
 	lru_unlock(lru);
 	return gnum;
