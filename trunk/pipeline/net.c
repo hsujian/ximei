@@ -10,6 +10,7 @@
 #include <sys/un.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <time.h>
 
 #include "net.h"
 
@@ -31,8 +32,13 @@ int lingering_close( int fd )
 	char buf[512];
 	int rv;
 	shutdown(fd, SHUT_WR);
+	setnonblock(fd);
+	time_t tv = time(NULL) + 1;
 	do {
 		rv = read(fd, buf, 512);
+		if (time(NULL) > tv) {
+			break;
+		}
 	} while (rv == -1 && errno == EINTR);
 	return close(fd);
 }

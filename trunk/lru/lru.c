@@ -96,10 +96,10 @@ static inline void lru_node_move2lru_head(lru_t *lru, node_t *node)
 static inline void lru_lock(lru_t *lru)
 {
 	assert(lru != NULL);
-	while(lru) {
-		if (__sync_bool_compare_and_swap(&lru->mutex, 0, 1))
-			return;
-		sched_yield();
+	if (lru) {
+		while (__sync_lock_test_and_set(&lru->mutex, 1)) {
+			sched_yield();
+		}
 	}
 }
 
@@ -107,7 +107,8 @@ static inline void lru_unlock(lru_t *lru)
 {
 	assert(lru != NULL);
 	if (lru) {
-		lru->mutex = 0;
+		__sync_synchronize ();
+		__sync_lock_release (&lru->mutex);
 	}
 }
 

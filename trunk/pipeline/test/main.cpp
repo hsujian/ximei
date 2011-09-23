@@ -61,12 +61,13 @@ int init()
 
 	srand(time(NULL));
 
-	g_pending_handle = greeting_bonze_new(2048, 10, MAX_RESPONSE_LEN);
+	g_pending_handle = greeting_bonze_new(2048, 128, MAX_RESPONSE_LEN);
 	if (g_pending_handle == NULL)
 	{
 		ty_writelog(TY_LOG_FATAL, "<init> call pipeline_creat failed!");
 		return -1;
 	}
+	greeting_bonze_set_guest_fn(g_pending_handle, service_once);
 	return 0;
 }
 
@@ -80,6 +81,8 @@ int main(int argc, char *argv[])
 	}
 
 	greeting_bonze_listen_port(g_pending_handle, g_conf.listen_port);
+	greeting_bonze_do(g_pending_handle);
+	return 0;
 	Thread_t *service_thrdlist = NULL;
 	if ((service_thrdlist = (Thread_t *) calloc(g_conf.thread_count, sizeof(Thread_t))) == NULL) 
     {

@@ -77,30 +77,23 @@ void *service_thread(void *pti)
 		ty_log_open_r(thrname, NULL);
 	}
 
-	int sock = 0;
-	int rlen = 0;
-	int ret = 0;
-	int q = 0;
-	int qlen = 0;
-	char *p = NULL;
-
-	const char *request = NULL;
-	char *response = NULL;
-	Log_info_t loginfo;
-
-	struct timeval tvstart, tvend;
-	u_int timeused;
-
 	while (1) {
+		struct timeval tvstart, tvend;
+		u_int timeused;
+		int sock = 0;
+		Log_info_t loginfo;
+		const char *request = NULL;
+		char *response = NULL;
+		int rlen = 0;
 		memset(&loginfo, 0, sizeof(Log_info_t));
 		loginfo.status = OK;
 		greeting_bonze_deal(g_pending_handle, &sock, (const char **)&request, &rlen, (const char **)&response);
 		GetTimeCurrent(tvstart);
 		DEBUG_LOG("recv %d [%s]", rlen, request);
 
-		q = 0;
-		qlen = 0;
-		p = strstr(request, "q=");
+		int q = 0;
+		int qlen = 0;
+		char *p = strstr(request, "q=");
 		if (p) {
 			q = atoi(p+2);
 			qlen = sprintf(response, "%d", q);
@@ -110,15 +103,50 @@ void *service_thread(void *pti)
 				"Content-Length: %d\r\n"
 				"Content-Type: text/plain\r\n"
 				"\r\n%d", qlen, q);
-		// do some other things
 
-send_to_UI:
 		greeting_bonze_send_off(g_pending_handle, sock, rlen);
 		GetTimeCurrent(tvend);
 		SetTimeUsed(timeused, tvstart, tvend);
-message_end:					
-
 		ty_writelog(TY_LOG_NOTICE, "[status %d][t %u]", loginfo.status, timeused);
 	}
+}
+
+void service_once(greeting_bonze_t *gb, const int fd)
+{
+	{
+		//char thrname[64];
+		//snprintf(thrname, 64, "st.%d", );
+		//ty_log_open_r(thrname, NULL);
+		ty_log_open_r(NULL, NULL);
+	}
+
+	struct timeval tvstart, tvend;
+	u_int timeused;
+	Log_info_t loginfo;
+	const char *request = (const char *)greeting_bonze_get_in_buf(gb, fd);
+	int rlen = greeting_bonze_get_in_len(gb, fd);
+	char *response = greeting_bonze_get_out_buf(gb, fd);
+	memset(&loginfo, 0, sizeof(Log_info_t));
+	loginfo.status = OK;
+	GetTimeCurrent(tvstart);
+	DEBUG_LOG("recv fd=%d %d [%s]\n", fd, rlen, request);
+
+	int q = 0;
+	int qlen = 0;
+	char *p = strstr(request, "q=");
+	if (p) {
+		q = atoi(p+2);
+		qlen = sprintf(response, "%d", q);
+	}
+	rlen = snprintf(response, MAX_RESPONSE_LEN, ""
+			"HTTP/1.0 200 OK\r\n"
+			"Content-Length: %d\r\n"
+			"Content-Type: text/plain\r\n"
+			"\r\n%d", qlen, q);
+
+	greeting_bonze_send_off(gb, fd, rlen);
+	GetTimeCurrent(tvend);
+	SetTimeUsed(timeused, tvstart, tvend);
+	ty_writelog(TY_LOG_NOTICE, "[status %d][t %u]", loginfo.status, timeused);
 }
 

@@ -29,51 +29,82 @@ typedef struct guest_t {
 	int out_len;
 	int eno;
 	struct aiocb cb;
+	greeting_bonze_t *gb;
 	char *in_buf;
 	char *out_buf;
 } guest_t;
 
 struct greeting_bonze_t {
+	volatile int num;
 	int capacity;
 	int listen;
-	int last_fd;
+	volatile int last_fd;
 	int in_size;
 	int out_size;
 	guest_t *guests;
 	char *buf;
+	guest_deal_fn guest_fn;
 };
+
+int greeting_bonze_get_in_len(greeting_bonze_t *gb, int fd)
+{
+	return gb->guests[fd].in_len;
+}
+
+int greeting_bonze_get_out_len(greeting_bonze_t *gb, int fd)
+{
+	return gb->guests[fd].out_len;
+}
+
+void greeting_bonze_set_in_len(greeting_bonze_t *gb, int fd, int len)
+{
+	gb->guests[fd].in_len = len;
+}
+
+void greeting_bonze_set_out_len(greeting_bonze_t *gb, int fd, int len)
+{
+	gb->guests[fd].out_len = len;
+}
+
+char *greeting_bonze_get_in_buf(greeting_bonze_t *gb, int fd)
+{
+	return gb->guests[fd].in_buf;
+}
+
+char *greeting_bonze_get_out_buf(greeting_bonze_t *gb, int fd)
+{
+	return gb->guests[fd].out_buf;
+}
+
+void greeting_bonze_set_guest_fn(greeting_bonze_t *gb, guest_deal_fn fn)
+{
+	gb->guest_fn = fn;
+}
 
 static int greeting_bonze_init_read(greeting_bonze_t *gb, const int fd);
 
 int greeting_bonze_deal(greeting_bonze_t *gb, int *fd, const char **pbuf, int *rlen, const char **out_buf)
 {
 	for (;;) {
-		int i;
-		for (i=gb->last_fd; i<gb->capacity; i++) {
-			if (CAS(&(gb->guests[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
-				*fd = i;
-				*pbuf = (const char *) gb->guests[i].in_buf;
-				*rlen = gb->guests[i].in_len;
-				*out_buf = gb->guests[i].out_buf;
-				gb->last_fd = i + 1;
-				DEBUG_LOG("request deal %d/%d\n", i, gb->guests[i].cb.aio_fildes);
-				return 0;
-			}
-		}
-		for (i=0; i<gb->capacity; i++) {
-			if (CAS(&(gb->guests[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
-				*fd = i;
-				*pbuf = (const char *) gb->guests[i].in_buf;
-				*rlen = gb->guests[i].in_len;
-				*out_buf = gb->guests[i].out_buf;
-				gb->last_fd = i + 1;
-				DEBUG_LOG("request deal %d/%d\n", i, gb->guests[i].cb.aio_fildes);
-				return 0;
-			}
-		}
-		//for(i=2; i--;) {
+		while (gb->last_fd < 0) {
 			sched_yield();
-		//}
+		}
+		int i = gb->last_fd;
+		if (i < 0) {
+			i = 0;
+		}
+		for (; i<gb->capacity; i++) {
+			if (CAS(&(gb->guests[i].status), JOBS_REQUEST_IN, JOBS_DO_JOB)) {
+				*fd = i;
+				*pbuf = (const char *) gb->guests[i].in_buf;
+				*rlen = gb->guests[i].in_len;
+				*out_buf = gb->guests[i].out_buf;
+				gb->last_fd = i + 1;
+				//DEBUG_LOG("request deal %d/%d\n", i, gb->guests[i].cb.aio_fildes);
+				return 0;
+			}
+		}
+		gb->last_fd = -1;
 	}
 	return 0;
 }
@@ -88,7 +119,7 @@ static void greeted(sigval_t sigval)
 	if (ret != 0) {
 		g->eno = errno;
 		DEBUG_LOG("request err fd=%d errno=%d ret=%d errmsg=%s\n", req->aio_fildes, g->eno, ret, strerror(g->eno));
-		close(req->aio_fildes);
+		lingering_close(req->aio_fildes);
 		return;
 	}
 	/* Request completed successfully, get the return status */
@@ -96,15 +127,19 @@ static void greeted(sigval_t sigval)
 	switch(g->status) {
 		case JOBS_WAIT_REQUEST:
 			g->in_len = len;
-			g->status = JOBS_REQUEST_IN;
+			g->gb->last_fd = req->aio_fildes;
 			DEBUG_LOG("ret=%d request in %d rlen=%d\n", ret, req->aio_fildes, len);
+			if (g->gb->guest_fn) {
+				g->status = JOBS_DO_JOB;
+				(*g->gb->guest_fn)(g->gb, req->aio_fildes);
+			} else {
+				g->status = JOBS_REQUEST_IN;
+			}
 			break;
 		case JOBS_WAIT_SEND_OFF:
 			g->status = JOBS_SEND_DONE;
-			guest_t *g0 = g - req->aio_fildes;
-			greeting_bonze_t *gb = (greeting_bonze_t *)((char *)g0 - offsetof(greeting_bonze_t, guests));
-			DEBUG_LOG("ret=%d request send done %d wlen=%d\n", ret, req->aio_fildes, g->out_len);
-			greeting_bonze_init_read(gb, req->aio_fildes);
+			DEBUG_LOG("ret=%d request send done %d wlen=%d/%d\n", ret, req->aio_fildes, len, g->out_len);
+			greeting_bonze_init_read(g->gb, req->aio_fildes);
 			break;
 		default:
 			break;
@@ -201,7 +236,7 @@ int greeting_bonze_do(greeting_bonze_t *gb)
 				return -1;
 			}
 		}
-		setnonblock(s);
+		//setnonblock(s);
 		if (s >= gb->capacity) {
 			lingering_close(s);
 			WARNING_LOG("out of capacity fd=%d/%d\n", s, gb->capacity);
@@ -241,6 +276,7 @@ greeting_bonze_t *greeting_bonze_new(const int capacity, const int in_size, cons
 		return NULL;
 	}
 	_new->capacity = mnum;
+	_new->last_fd = -1;
 	_new->in_size = in_size;
 	_new->out_size = out_size;
 	_new->guests = (guest_t *)calloc(mnum, sizeof(guest_t));
@@ -255,6 +291,7 @@ greeting_bonze_t *greeting_bonze_new(const int capacity, const int in_size, cons
 	}
 	int i;
 	for (i=mnum; i--;) {
+		_new->guests[i].gb = _new;
 		_new->guests[i].in_buf = buf + (in_size + out_size) * i;
 		_new->guests[i].out_buf = _new->guests[i].in_buf + in_size;
 	}

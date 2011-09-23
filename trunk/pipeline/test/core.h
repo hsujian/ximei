@@ -55,6 +55,7 @@ typedef struct tag_Tread_t
 void signalsetup();
 
 void *service_thread(void *pti);
+void service_once(greeting_bonze_t *gb, const int fd);
 
 
 #endif

@@ -13,6 +13,8 @@ all	: $(LIBO)
 $(LIBO) : $(OBJS)
 	g++ -o $@ $^ $(CPPFLAGS) $(LIBFLAGS)
 
+client : client.o
+	g++ -o $@ $^ $(CPPFLAGS) $(LIBFLAGS)
+
 clean:
-	rm *.o
-	rm $(LIBO)
+	-rm -f *.o $(LIBO)
