@@ -1,4 +1,11 @@
 #include "mmap_util.h"
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+
+#ifndef MAX_PATH
+# define MAX_PATH 2048
+#endif
 
 static int mmap_file_open(mmap_file_t &mft, const char *filepath, int prot)
 {
@@ -43,9 +50,9 @@ int mmap_file_readonly_open(mmap_file_t &mft, const char *filepath)
 void mmap_file_close(mmap_file_t &mft)
 {
 	if (mft.size > 0 && (void *) mft.mm != MAP_FAILED) {
-		munmap(mft.mm, mft.size);
+		munmap((void *)mft.mm, mft.size);
 		mft.size = 0;
-		mft.mm = MAP_FAILED;
+		mft.mm = (char *)MAP_FAILED;
 	}
 }
 
@@ -133,7 +140,7 @@ int mmap_file_array_creat(const char *filepath, off_t size, int item_size, int i
 	if (rv != MMAP_FILE_ERROR_OK) {
 		return rv;
 	}
-	mmap_file_array_t binfo_mft;
+	mmap_file_t binfo_mft;
 	rv = mmap_file_open(binfo_mft, info_file, PROT_READ | PROT_WRITE);
 	if (rv != MMAP_FILE_ERROR_OK) {
 		return rv;

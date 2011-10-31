@@ -1,7 +1,6 @@
 #ifndef __MMAP_UTIL_H_
 #define __MMAP_UTIL_H_
 
-
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
