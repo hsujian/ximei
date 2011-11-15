@@ -87,69 +87,53 @@ int creat_or_truncate(const char *filepath, off_t size)
 	return 0;
 }
 
-void mmap_file_array_close(mmap_file_array_t &mft)
+void mmap_file_array_close(mmap_file_array_t *ptr)
 {
-	mmap_file_close(mft.data);
-	mmap_file_close(mft.item_info);
+	if (ptr == NULL) {
+		return;
+	}
+	munmap((void *)ptr, ptr->mmap_size);
 }
 
-static int mmap_file_array_open(mmap_file_array_t &mft, const char *filepath, int prot)
+static mmap_file_array_t * mmap_file_array_open(const char *filepath, int prot)
 {
-	int rv = mmap_file_open(mft.data, filepath, prot);
+	mmap_file_t mft;
+	int rv = mmap_file_open(mft, filepath, prot);
 	if (rv != MMAP_FILE_ERROR_OK) {
-		return rv;
+		return NULL;
 	}
-	char info_file[MAX_PATH];
-	snprintf(info_file, sizeof(info_file), "%s.binfo", filepath);
-	rv = mmap_file_open(mft.item_info, info_file, prot);
-	if (rv != MMAP_FILE_ERROR_OK) {
-		int eno = errno;
-		mmap_file_array_close(mft);
-		errno = eno;
-		return rv;
-	}
-	int *item_info = (int *)mft.item_info.mm;
-	mft.item_cur_num = &item_info[0];
-	mft.item_max_num = &item_info[1];
-	mft.item_size = &item_info[2];
-	return MMAP_FILE_ERROR_OK;
+	return (mmap_file_array_t *) mft.mm;
 }
 
-int mmap_file_array_readonly_open(mmap_file_array_t &mft, const char *filepath)
+mmap_file_array_t * mmap_file_array_readonly_open(const char *filepath)
 {
-	return mmap_file_array_open(mft, filepath, PROT_READ);
+	return mmap_file_array_open(filepath, PROT_READ);
 }
 
-int mmap_file_array_rw_open(mmap_file_array_t &mft, const char *filepath)
+mmap_file_array_t * mmap_file_array_rw_open(const char *filepath)
 {
-	return mmap_file_array_open(mft, filepath, PROT_READ | PROT_WRITE);
+	return mmap_file_array_open(filepath, PROT_READ | PROT_WRITE);
 }
 
-#define MAX_BINFO_INT_NUM 256
-
-int mmap_file_array_creat(const char *filepath, off_t size, int item_size, int item_max_num)
+mmap_file_array_t *mmap_file_array_creat(const char *filepath, int item_size, int item_max_num)
 {
-	char info_file[MAX_PATH];
-	snprintf(info_file, sizeof(info_file), "%s.binfo", filepath);
-	int rv = creat_or_truncate(info_file, sizeof(int) * MAX_BINFO_INT_NUM);
+	off_t size = sizeof(mmap_file_array_t) + item_size * item_max_num;
+	int rv = creat_or_truncate(filepath, size);
 	if (rv != MMAP_FILE_ERROR_OK) {
-		return rv;
+		return NULL;
 	}
-
-	rv = creat_or_truncate(filepath, size);
+	mmap_file_t mft;
+	rv = mmap_file_open(mft, filepath, PROT_READ | PROT_WRITE);
 	if (rv != MMAP_FILE_ERROR_OK) {
-		return rv;
+		return NULL;
 	}
-	mmap_file_t binfo_mft;
-	rv = mmap_file_open(binfo_mft, info_file, PROT_READ | PROT_WRITE);
-	if (rv != MMAP_FILE_ERROR_OK) {
-		return rv;
-	}
-	int *binfo = (int *)binfo_mft.mm;
-	binfo[0] = 0;
-	binfo[1] = item_max_num;
-	binfo[2] = item_size;
-	mmap_file_close(binfo_mft);
-	return 0;
+	mmap_file_array_t *ptr = (mmap_file_array_t *)mft.mm;
+	ptr->padding_1 = 0;
+	ptr->max_num = item_max_num;
+	ptr->cur_num = 0;
+	ptr->mmap_size = size;
+	ptr->item_size = item_size;
+	ptr->padding_2 = 0;
+	return ptr;
 }
 

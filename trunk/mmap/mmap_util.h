@@ -28,25 +28,22 @@ extern void mmap_file_close(mmap_file_t &mft);
 
 
 typedef struct {
-	int *item_cur_num;
-	int *item_max_num;
-	int *item_size;
-	mmap_file_t data;
-	mmap_file_t item_info;
+	int padding_1;
+	int version;
+	int max_num;
+	int cur_num;
+	off_t mmap_size;
+	int item_size;
+	int padding_2;
+	char data[0];
 }mmap_file_array_t;
 
-extern int mmap_file_array_readonly_open(mmap_file_array_t &mft, const char *filepath);
+extern mmap_file_array_t * mmap_file_array_readonly_open(const char *filepath);
 
-extern int mmap_file_array_rw_open(mmap_file_array_t &mft, const char *filepath);
+extern mmap_file_array_t * mmap_file_array_rw_open(const char *filepath);
 
-extern int mmap_file_array_rw_creat(const char *filepath, off_t size, int item_size, int item_max_num);
+extern mmap_file_array_t *mmap_file_array_creat(const char *filepath, int item_size, int item_max_num);
 
-extern void mmap_file_array_close(mmap_file_array_t &mft);
-
-#define get_mfarray_item_cur_num(mmap_file_array_obj) (*((mmap_file_array_obj).item_cur_num))
-#define get_mfarray_item_max_num(mmap_file_array_obj) (*((mmap_file_array_obj).item_max_num))
-#define get_mfarray_item_size(mmap_file_array_obj) (*((mmap_file_array_obj).item_size))
-
-#define set_mfarray_item_cur_num(mmap_file_array_obj, cur_num) *((mmap_file_array_obj).item_cur_num) = (cur_num)
+extern void mmap_file_array_close(mmap_file_array_t *ptr);
 
 #endif
