@@ -44,6 +44,11 @@ extern "C" {
 	 */
 	lru_t *lru_new(int lru_size, int hash);
 
+	/**
+	 * set data release free memory slot
+	 */
+	uint32_t lru_set_release_data_slot(lru_t *lru, uint32_t slot_size);
+
 #ifdef __cplusplus
 }
 #endif

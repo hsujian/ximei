@@ -1,9 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sched.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/uio.h>
+#include <malloc.h>
 #include <assert.h>
 
 #include "lru.h"
@@ -18,14 +16,21 @@ typedef struct node_t {
 	void *data;
 } node_t;
 
+typedef struct recycle_t {
+	struct recycle_t *next;
+} recycle_t;
+
 struct lru_t {
 	volatile int mutex;
 	int hash;
 	int size;
+	uint32_t release_data_slot;
+	uint32_t total_free_size;
 	node_t *lru_head;
 	node_t *lru_tail;
 	node_t *nodes;
 	node_t *idle;
+	recycle_t *data_recycle;
 	node_t **barrel;
 	/* data_free_fn data_free_fn; */
 };
@@ -42,6 +47,9 @@ struct lru_t {
 
 static inline void lru_node_free(lru_t *lru, node_t *node);
 static inline node_t *lru_node_new(lru_t *lru);
+
+static void lru_data_free(lru_t *lru, char *data);
+static void *lru_data_new(lru_t *lru, size_t size);
 
 static inline void lru_node_move2idle(lru_t *lru, node_t *node, int barrel_idx, node_t *hash_prev)
 {
@@ -128,20 +136,33 @@ int lru_set(lru_t *lru, lru_find_t *node, int num)
 				continue;
 			}
 			find = 1;
-			if (seek->data != node[i].data) {
-				free(seek->data);
+			size_t usable_size = malloc_usable_size(seek->data);
+			if (usable_size >= node[i].size) {
+				if (seek->data) {
+					memcpy(seek->data, node[i].data, node[i].size);
+				}
+			} else {
+				void *data = lru_data_new(lru, node[i].size);
+				seek->data = data;
+				if (data) {
+					memcpy(data, node[i].data, node[i].size);
+				}
 			}
-			seek->data = node[i].data;
 			seek->size = node[i].size;
 			lru_node_move2lru_head(lru, seek);
 			break;
 		}
 		if (find == 0) {
 			node_t *new_node = lru_node_new(lru);
+			void *data = lru_data_new(lru, node[i].size);
+
 			new_node->key1 = node[i].key1;
 			new_node->key2 = node[i].key2;
-			new_node->data = node[i].data;
+			new_node->data = data;
 			new_node->size = node[i].size;
+			if (data) {
+				memcpy(data, node[i].data, node[i].size);
+			}
 
 			HASH_PNEXT (new_node) = lru->barrel[idx];
 			lru->barrel[idx] = new_node;
@@ -232,7 +253,7 @@ static inline void lru_node_free(lru_t *lru, node_t *node)
 	assert(lru != NULL);
 	assert(node != NULL);
 	if (node->data) {
-		free(node->data);
+		lru_data_free(lru, node->data);
 	}
 	IDLE_PNEXT (node) = lru->idle;
 	lru->idle = node;
@@ -253,8 +274,23 @@ void lru_free(lru_t *lru)
 			}
 			free(lru->nodes);
 		}
+		while (lru->data_recycle) {
+			recycle_t *cyc = lru->data_recycle;
+			lru->data_recycle = cyc->next;
+			free(cyc);
+		}
 		free(lru);
 	}
+}
+
+uint32_t lru_set_release_data_slot(lru_t *lru, uint32_t slot_size)
+{
+	if (lru) {
+		uint32_t orig = lru->release_data_slot;
+		lru->release_data_slot = slot_size;
+		return orig;
+	}
+	return 0;
 }
 
 lru_t *lru_new(int lru_size, int hash)
@@ -271,6 +307,8 @@ lru_t *lru_new(int lru_size, int hash)
 	}
 	_new->mutex = 0;
 	_new->size = lru_size;
+	_new->release_data_slot = 100 * 1024 * 1024;
+	_new->total_free_size = 0;
 	_new->lru_head = NULL;
 	_new->lru_tail = NULL;
 	_new->hash = hash;
@@ -285,6 +323,7 @@ lru_t *lru_new(int lru_size, int hash)
 		HASH_NNEXT (_new->nodes[i]) = &(_new->nodes[i+1]);
 	}
 	_new->idle = _new->nodes;
+	_new->data_recycle = NULL;
 
 	_new->barrel = (node_t **) calloc(hash, sizeof(node_t*));
 	if ( ! _new->barrel ) {
@@ -292,5 +331,69 @@ lru_t *lru_new(int lru_size, int hash)
 		return NULL;
 	}
 	return _new;
+}
+
+static void lru_data_free(lru_t *lru, char *data)
+{
+	if (lru->total_free_size > lru->release_data_slot) {
+		while (lru->data_recycle) {
+			recycle_t *cyc = lru->data_recycle;
+			lru->data_recycle = cyc->next;
+			free(cyc);
+		}
+		lru->total_free_size = 0;
+	}
+
+	size_t usable_size = malloc_usable_size(data);
+	lru->total_free_size += usable_size;
+
+	recycle_t *this = (recycle_t*) data;
+	if (lru->data_recycle == NULL) {
+		this->next = NULL;
+		lru->data_recycle = this;
+		return;
+	}
+
+	recycle_t *find = lru->data_recycle;
+	recycle_t *last = NULL;
+	size_t size = malloc_usable_size(find);
+	if (usable_size < size) {
+		lru->data_recycle = this;
+		this->next = find;
+		return;
+	}
+	for (last = find, find = find->next; find; last = find, find = find->next) {
+		size = malloc_usable_size(find);
+		if (usable_size < size) {
+			last->next = this;
+			this->next = find;
+			return;
+		}
+	}
+	last->next = this;
+	this->next = NULL;
+}
+
+static void *lru_data_new(lru_t *lru, size_t size)
+{
+	if (lru->data_recycle == NULL) {
+		return malloc(size);
+	}
+
+	recycle_t *find = lru->data_recycle;
+	recycle_t *last = NULL;
+	size_t usable_size = malloc_usable_size(find);
+	if (usable_size > size) {
+		lru->data_recycle = find->next;
+		return find;
+	}
+	for (last = find, find = find->next; find; last = find, find = find->next) {
+		usable_size = malloc_usable_size(find);
+		if (usable_size > size) {
+			last->next = find->next;
+			return find;
+		}
+	}
+	return malloc(size);
 }
 

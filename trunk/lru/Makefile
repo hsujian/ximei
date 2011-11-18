@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS= -O2 -W -Wall -D_REENTRANT #-DNDEBUG
+CFLAGS= -O2 -Wall -D_REENTRANT -DNDEBUG
 LFLAGS=
 
 OBJS=lru.o
@@ -11,7 +11,6 @@ all	: $(LIBO)
 $(LIBO) : $(OBJS)
 	@-rm -f $@
 	$(AR) rcv $@ $^
-	@-rm -f $^
 clean:
 	@-rm -f *.o $(LIBO)
 tags:
