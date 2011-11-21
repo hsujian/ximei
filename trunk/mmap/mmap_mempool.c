@@ -21,10 +21,24 @@ typedef struct {
 	uint64_t usable_size;
 } mem_recycle_t;
 
+#ifndef DEBUG_LOG
+#ifndef NDEBUG
+# define DEBUG_LOG(fmt, arg...) printf("<%s(%s:%d)> " fmt, __FUNCTION__, __FILE__, __LINE__, ##arg)
+# else
+# define DEBUG_LOG(fmt, arg...)
+#endif
+#endif
+
 static int mkdirp(const char *dir, mode_t mode)
 {
+	mode |= 0111;
 	int rv = mkdir (dir, mode);
-	if (!(rv == -1 && errno == ENOTDIR)) {
+	if (rv == 0 || (rv == -1 && errno == EEXIST)) {
+		return 0;
+	}
+	DEBUG_LOG("rv=%d errno=%d msg=%s\n", rv, errno, strerror(errno));
+
+	if (!(rv == -1 && (errno == ENOTDIR || errno == ENOENT))) {
 		return rv;
 	}
 	char tmp[PATH_MAX+1];
@@ -55,20 +69,21 @@ static int mkdirp(const char *dir, mode_t mode)
 			tmp[i] = '\0';
 			rv = mkdir (tmp, mode);
 			tmp[i] = '/';
-			if (rv == -1 && errno == ENOTDIR) {
+			if (rv == -1 && (errno == ENOTDIR || errno == ENOENT)) {
+	DEBUG_LOG("rv=%d errno=%d msg=%s\n", rv, errno, strerror(errno));
 				continue;
 			}
-			if (rv == 0) {
-				break;
-			}
+	DEBUG_LOG("rv=%d errno=%d msg=%s\n", rv, errno, strerror(errno));
+			break;
 		}
 	}
-	for (; i<len; i++) {
+	for (i++; i<len; i++) {
 		if (tmp[i] == '/') {
 			tmp[i] = '\0';
 			rv = mkdir (tmp, mode);
 			tmp[i] = '/';
 			if (rv != 0) {
+	DEBUG_LOG("rv=%d errno=%d msg=%s\n", rv, errno, strerror(errno));
 				return rv;
 			}
 		}
