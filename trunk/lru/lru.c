@@ -391,6 +391,7 @@ static void *lru_data_new(lru_t *lru, size_t size)
 		usable_size = malloc_usable_size(find);
 		if (usable_size > size) {
 			last->next = find->next;
+			lru->total_free_size -= usable_size;
 			return find;
 		}
 	}
