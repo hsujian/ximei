@@ -3,10 +3,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <malloc.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
+#include "scgi.h"
 #include "net.h"
+
+#define DEBUG(fmt, arg...) printf("<%s(%s:%d)> " fmt, __FUNCTION__, __FILE__, __LINE__, ##arg)
 
 void
 scgi_init_request(scgi_t *scgi)
@@ -24,7 +28,7 @@ scgi_request(scgi_t *scgi, int socket)
 }
 
 static int
-header_array_add(const header_array_t *hat, const char *name, const char *val)
+header_array_add(header_array_t *hat, const char *name, const char *val)
 {
 	if (hat->elts >= hat->size) {
 		header_t *h = (header_t *)realloc(hat->array, sizeof(header_t)*(hat->size+5));
@@ -44,14 +48,13 @@ header_array_add(const header_array_t *hat, const char *name, const char *val)
 int
 scgi_set_header(scgi_t *scgi, const char *name, const char *val)
 {
-	return header_array_add(scgi->out_headers, name, val);
+	return header_array_add(& scgi->out_headers, name, val);
 }
 
 int
 scgi_get_request(scgi_t *scgi)
 {
 	int rv = 0;
-	int error = SCGI_ERROR;
 	unsigned long len, i;
 	char *p;
 	int j;
@@ -63,36 +66,44 @@ scgi_get_request(scgi_t *scgi)
 	do {
 		rv = recv(scgi->socket, buf, sizeof(buf), MSG_PEEK);
 		if (rv == 0) {
+			DEBUG("recv MSG_PEEK 0\n");
 			return -1;
 		}
 		if (rv == -1) {
-			if (error == EAGAIN || error == EINTR) {
+			DEBUG("recv MSG_PEEK -1: %d %s\n", errno, strerror(errno));
+			if (errno == EAGAIN || errno == EINTR) {
 				continue;
 			}
 			return -1;
-		}
-
-		if (buf[0] < '0' || buf[0] > '9') {
-			return -1;
-		}
-
-		scgi->raw_header.elts = atoi(buf);
-		int i = 0;
-		do {
-			if (buf[i] < '0' || buf[i] > '9') {
-				break;
-			}
-			i++;
-		} while(1);
-
-		if (buf[i] == ':') {
-			i++;
-			do {
-				rv = recv(scgi->socket, buf, i, 0);
-			} while(rv == -1 && errno == EINTR);
-			break;
 		} else {
-			return -1;
+
+			if (buf[0] < '0' || buf[0] > '9') {
+				DEBUG("recv not number\n");
+				return -1;
+			}
+
+			scgi->raw_header.elts = atoi(buf);
+			DEBUG("recv number:%d\n", scgi->raw_header.elts);
+			int i = 0;
+			do {
+				if (buf[i] < '0' || buf[i] > '9') {
+					break;
+				}
+				i++;
+			} while(1);
+
+			if (buf[i] == ':') {
+				i++;
+				DEBUG("recv skip %d char\n", i);
+				do {
+					rv = recv(scgi->socket, buf, i, 0);
+				} while(rv == -1 && errno == EINTR);
+				DEBUG("skip done\n");
+				break;
+			} else {
+				DEBUG("maybe format error, should be ':'\n");
+				return -1;
+			}
 		}
 
 	} while(rv == -1 && errno == EINTR);
@@ -116,6 +127,7 @@ scgi_get_request(scgi_t *scgi)
 	}
 
 	if (scgi->raw_header.array[scgi->raw_header.elts] != ',') {
+		DEBUG("maybe format error, should be ','\n");
 		return -1;
 	}
 	scgi->raw_header.array[scgi->raw_header.elts] = '\0';
@@ -130,7 +142,8 @@ scgi_get_request(scgi_t *scgi)
 		val = p;
 		while (i++ < len && *(p++));
 
-		header_array_add(scgi->in_headers, name, val);
+		header_array_add(& scgi->in_headers, name, val);
+		DEBUG("header: %s:%s\n", name, val);
 	}
 
 	return 1;
@@ -139,8 +152,8 @@ scgi_get_request(scgi_t *scgi)
 int
 scgi_send_response(scgi_t *scgi, void *buf, int len)
 {
-	const char *head = "Status: 200 OK\r\nContent-Type: text/plain\r\n\r\n";
-	int headlen = strlen(head);
+	char head[128];
+	int headlen = sprintf(head, "Status: 200 OK\r\nContent-length: %d\r\nContent-Type: text/plain\r\n\r\n", len);
 	int rv = socket_send_all(scgi->socket, head, headlen);
 	if (rv == -1) {
 		return -1;
