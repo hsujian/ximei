@@ -14,6 +14,22 @@
 
 #include "net.h"
 
+#ifndef __TY_LOG_H_
+
+#undef DEBUG_LOG
+#undef WARNING_LOG
+#define DEBUG_LOG(fmt, arg...)
+#define WARNING_LOG(fmt, arg...)
+
+#endif
+
+#ifndef NDEBUG
+
+#undef DEBUG_LOG
+#define DEBUG_LOG(fmt, arg...) printf("<%s(%s:%d)> " fmt, __FUNCTION__, __FILE__, __LINE__, ##arg)
+
+#endif
+
 int setnonblock(int fd)
 {
 	int flags = fcntl(fd, F_GETFL);
@@ -174,8 +190,7 @@ int socket_recv(int fd, void *buf, int len)
 				return -1;
 				break;
 			case 0:
-				errno = EPIPE;
-				return -1;
+				return rlen;
 			default:
 				nread -= rv;
 				rlen += rv;
@@ -183,6 +198,21 @@ int socket_recv(int fd, void *buf, int len)
 		}
 	} while (nread > 0);
 	return rlen;
+}
+
+int socket_send_all(int fd, const void *buf, int len)
+{
+	int l = len, rv;
+	const char *p = (const char *)buf;
+	do {
+		rv = socket_send(fd, p, l);
+		if (rv == -1 && errno != EAGAIN) {
+			return -1;
+		}
+		p += rv;
+		l -= rv;
+	} while (l>0);
+	return len;
 }
 
 int socket_tcpconnect4(const char *ip, const int port)

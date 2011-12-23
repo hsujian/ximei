@@ -6,30 +6,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-typedef struct {
-	const char *name;
-	const char *value;
-} header_t;
-
-typedef struct {
-	int size;
-	int elts;
-	header_t *array;
-} header_array_t;
-
-typedef struct {
-	int size;
-	int elts;
-	char *array;
-} char_array_t;
-
-typedef struct {
-	int socket;
-
-	char_array_t raw_header;
-	header_array_t in_headers;
-	header_array_t out_headers;
-} scgi_t;
+#include "net.h"
 
 void
 scgi_init_request(scgi_t *scgi)
@@ -88,6 +65,12 @@ scgi_get_request(scgi_t *scgi)
 		if (rv == 0) {
 			return -1;
 		}
+		if (rv == -1) {
+			if (error == EAGAIN || error == EINTR) {
+				continue;
+			}
+			return -1;
+		}
 
 		if (buf[0] < '0' || buf[0] > '9') {
 			return -1;
@@ -103,10 +86,13 @@ scgi_get_request(scgi_t *scgi)
 		} while(1);
 
 		if (buf[i] == ':') {
+			i++;
 			do {
 				rv = recv(scgi->socket, buf, i, 0);
 			} while(rv == -1 && errno == EINTR);
 			break;
+		} else {
+			return -1;
 		}
 
 	} while(rv == -1 && errno == EINTR);
@@ -153,5 +139,12 @@ scgi_get_request(scgi_t *scgi)
 int
 scgi_send_response(scgi_t *scgi, void *buf, int len)
 {
+	const char *head = "Status: 200 OK\r\nContent-Type: text/plain\r\n\r\n";
+	int headlen = strlen(head);
+	int rv = socket_send_all(scgi->socket, head, headlen);
+	if (rv == -1) {
+		return -1;
+	}
+	return socket_send_all(scgi->socket, buf, len);
 }
 
