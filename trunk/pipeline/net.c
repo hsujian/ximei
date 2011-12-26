@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -9,24 +11,22 @@
 #include <netinet/in.h>
 #include <sys/un.h>
 #include <arpa/inet.h>
+
 #include <poll.h>
+
 #include <time.h>
 
 #include "net.h"
 
-#ifndef __TY_LOG_H_
-
-#undef DEBUG_LOG
-#undef WARNING_LOG
-#define DEBUG_LOG(fmt, arg...)
-#define WARNING_LOG(fmt, arg...)
-
-#endif
-
 #ifndef NDEBUG
 
-#undef DEBUG_LOG
+#ifndef DEBUG_LOG
 #define DEBUG_LOG(fmt, arg...) printf("<%s(%s:%d)> " fmt, __FUNCTION__, __FILE__, __LINE__, ##arg)
+#endif
+
+#else
+
+#define DEBUG_LOG(fmt, arg...)
 
 #endif
 
@@ -63,30 +63,18 @@ int socket_tcplisten_port(const int port)
 {
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if ( fd == -1 ) {
-		WARNING_LOG("socket fail [%d]", errno);
 		return -1;
 	}
 
 	int optval = -1;
-	int int_len = sizeof(int);
-	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, (socklen_t*)&int_len) == -1) {
-		WARNING_LOG("Error when getting socket option SO_REUSEADDR");
-		optval = 0;
-	}
-	if (optval == 0) {
-		optval = 1;
-		setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-	}
+	optval = 1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
-	int_len = sizeof(int);
-	if (getsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, (socklen_t*)&int_len) == -1) {
-		WARNING_LOG("Error when getting socket option SO_KEEPALIVE");
-		optval = 0;
-	}
-	if (optval == 0) {
-		optval = 1;
-		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval));
-	}
+	optval = 1;
+	setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval));
+
+	optval = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
 
 	struct sockaddr_in al;
 	memset(&al, 0, sizeof(al));
@@ -96,13 +84,47 @@ int socket_tcplisten_port(const int port)
 	al.sin_port = htons( port );
 
 	if (bind(fd, (struct sockaddr *)&al, sizeof(al)) < 0) {
-		WARNING_LOG("failed to bind [%d]", errno);
 		close(fd);
 		return -1;
 	}
 
 	if (listen(fd, 128) < 0) {
-		WARNING_LOG("failed to listen to socket [%d]", errno);
+		close(fd);
+		return -1;
+	}
+
+	return fd;
+}
+
+int socket_domain_listen(const char *path)
+{
+	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if ( fd == -1 ) {
+		return -1;
+	}
+
+	int optval = -1;
+
+	optval = 1;
+	setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval));
+
+	optval = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
+
+	struct sockaddr_un al;
+	memset(&al, 0, sizeof(al));
+
+	al.sun_family = AF_UNIX;
+	snprintf(al.sun_path, sizeof(al.sun_path), "%s", path);
+	unlink(al.sun_path);
+	int len = strlen(al.sun_path) + sizeof(al.sun_family);
+
+	if (bind(fd, (struct sockaddr *)&al, len) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	if (listen(fd, 128) < 0) {
 		close(fd);
 		return -1;
 	}
@@ -221,6 +243,9 @@ int socket_tcpconnect4(const char *ip, const int port)
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		return -1;
 	}
+	int optval = 1;
+	setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
+
 	struct sockaddr_in addr;
 	bzero(&addr, sizeof(struct sockaddr));
 	addr.sin_family = AF_INET;
@@ -238,6 +263,9 @@ int socket_connect_unix(const char *path)
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
 		return -1;
 	}
+	int optval = 1;
+	setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
+
 	struct sockaddr_un addr;
 	bzero(&addr, sizeof(struct sockaddr));
 	addr.sun_family = AF_UNIX;
@@ -249,17 +277,46 @@ int socket_connect_unix(const char *path)
 	return s;
 }
 
-int wait_for_io_or_timeout(int socket, int for_read, int timeout_ms)
+int is_socket_need_close(int socket)
+{
+	struct tcp_info info;
+	int len = sizeof(info);
+	getsockopt(socket, IPPROTO_TCP, TCP_INFO, &info, (socklen_t *)&len);
+	return info.tcpi_state == TCP_CLOSE_WAIT;
+}
+
+int wait_for_io(int socket, int for_read, int timeout_ms, int *revents)
 {
 	struct pollfd pfd;
-	int rc;
+	int rv;
 
 	pfd.fd     = socket;
 	pfd.events = for_read ? POLLIN : POLLOUT;
+	pfd.events |= POLLRDHUP;
+	pfd.revents = 0;
+
+	*revents = 0;
 
 	do {
-		rc = poll(&pfd, 1, timeout_ms);
-	} while (rc == -1 && errno == EINTR);
-	return rc;
+		rv = poll(&pfd, 1, timeout_ms);
+	} while (rv == -1 && errno == EINTR);
+
+	//printf("revents=%#x\n", pfd.revents);
+	if (rv == 1) {
+		if ((pfd.revents & POLLRDHUP) || (pfd.revents & POLLHUP) || (pfd.revents & POLLERR)) {
+			*revents = pfd.revents;
+		}
+	}
+	return rv;
+}
+
+int wait_for_io_or_timeout(int socket, int for_read, int timeout_ms)
+{
+	int epipe = 0;
+	int rv = wait_for_io(socket, for_read, timeout_ms, &epipe);
+	if (rv == 1 && epipe) {
+		return -1;
+	}
+	return rv;
 }
 

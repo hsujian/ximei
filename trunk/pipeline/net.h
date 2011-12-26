@@ -12,8 +12,14 @@ extern "C" {
 int setnonblock(int fd);
 int lingering_close(int fd);
 int socket_tcplisten_port(const int port);
+int socket_domain_listen(const char *path);
 
+int is_socket_need_close(int socket);
+int wait_for_io(int socket, int for_read, int timeout_ms, int *err_revents);
 int wait_for_io_or_timeout(int socket, int for_read, int timeout_ms);
+
+#define wait_read(socket, timeout_ms) wait_for_io_or_timeout(socket, 1, timeout_ms)
+#define wait_write(socket, timeout_ms) wait_for_io_or_timeout(socket, 0, timeout_ms)
 
 int socket_sendv(int fd, struct iovec *vec, int nvec);
 int socket_send(int fd, const void *buf, int len);
